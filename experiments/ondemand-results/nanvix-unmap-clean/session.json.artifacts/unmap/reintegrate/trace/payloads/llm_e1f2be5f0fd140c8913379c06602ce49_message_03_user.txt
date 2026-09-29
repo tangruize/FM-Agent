@@ -1,0 +1,1 @@
+Your previous response was invalid: proof_map_updates must be a list of non-empty strings. Return only valid JSON matching this schema: an object with disposition, rationale, caller_effect, remaining_gap, proof_map_updates, and null or complete parent_contract_revision. Do not include Markdown, tags, or prose.

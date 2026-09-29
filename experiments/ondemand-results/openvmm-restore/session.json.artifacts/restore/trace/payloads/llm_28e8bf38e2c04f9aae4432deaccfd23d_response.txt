@@ -1,0 +1,161 @@
+{
+  "contract": {
+    "pre_condition": "self is a valid LoadedVm and state is an accepted SavedState for this destination. If state.inventory is nonempty, acceptance requires self.state_units.validate_inventory(&state.inventory) to return Ok. Restoring state.units requires the unshown preconditions of self.state_units.restore(state.units). This body performs no compatibility check when state.inventory is empty.",
+    "post_condition": "At the body level, an Ok return establishes only that any required nonempty-inventory validation returned Ok and self.state_units.restore(state.units).await returned Ok. The stronger caller-facing result—that every snapshot-owned component has the state represented by state.units and destination-owned preparation and bindings remain unchanged—requires contracts for validate_inventory and state_units.restore.",
+    "failure_condition": "The function returns Err if nonempty-inventory validation fails or state_units.restore fails. If validation fails, restore is not invoked. This body establishes no rollback, atomicity, or unchanged-state guarantee on either failure path."
+  },
+  "abstraction": {
+    "name": "LoadedVm snapshot projection",
+    "abstract_state": "A partition of caller-observable LoadedVm state into snapshot-owned component states represented by SavedState.units, compatibility metadata represented by SavedState.inventory, and destination-owned preparation, resources, identities, and bindings intentionally not restored from the snapshot.",
+    "projection": "project_saved(state) maps state.units to the logical state of every snapshot-owned component. state.inventory constrains compatibility between that projection and the destination when nonempty. This body defines neither the projection mapping nor the compatibility relation.",
+    "preserved_state": "The destination-owned portion of LoadedVm, including preparation, runtime resources, host bindings, identity bindings, and other state excluded from the snapshot projection, except for effects explicitly permitted by contracts of validate_inventory or state_units.restore.",
+    "hidden_representation": "state_units internals, unit discovery and ordering, serialization formats, restoration staging, caches, resource handles, preparation state, and host-specific bindings.",
+    "observation_boundary": "The instant the restore future resolves to Ok and the caller regains access to &mut LoadedVm. Equality and framing are evaluated through subsequent caller-accessible LoadedVm and component observations, excluding transient states during await and hidden representation differences that are observationally equivalent."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "A nonempty inventory is checked before unit restoration.",
+      "evidence": "The conditional invokes validate_inventory(&state.inventory) with error propagation before invoking restore.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "An empty inventory bypasses compatibility validation in this body.",
+      "evidence": "validate_inventory is invoked only when !state.inventory.is_empty().",
+      "disposition": "supported"
+    },
+    {
+      "claim": "An Ok result implies state_units.restore consumed state.units and returned Ok.",
+      "evidence": "self.state_units.restore(state.units).await? precedes the final Ok(()).",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Successful restoration makes every snapshot-owned component observationally equal to the state represented by state.units.",
+      "evidence": "The body delegates restoration and performs no component traversal, completeness check, or post-restore comparison; the restore callee contract is not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Destination-owned preparation and bindings are preserved.",
+      "evidence": "The body directly assigns no such state, but the effects of both invoked state_units methods are unshown.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Skipping validation for an empty inventory admits an incompatible snapshot.",
+      "evidence": "The branch skips validate_inventory, but the meaning of an empty inventory and any compatibility enforcement performed by restore are unknown.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "A failed restore necessarily leaves partially restored state.",
+      "evidence": "This body contains no rollback, but state_units.restore may be internally transactional.",
+      "disposition": "challenged"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Aggregate snapshot projection restoration",
+      "claim": "If state_units.restore(units) returns Ok, every snapshot-owned component in the accepted unit set is present as required and observationally equals its value in project_saved(units), with no omitted, duplicated, or spuriously restored component.",
+      "why_blocking": "The wrapper only propagates callee success and cannot establish component-wise state equality or restoration completeness.",
+      "kind": "callee_contract",
+      "suggested_callees": [
+        {
+          "symbol": "state_units.restore",
+          "file_hint": "implementation of the state_units type used by LoadedVm",
+          "reason": "It consumes SavedState.units and must provide the aggregate component restoration guarantee."
+        }
+      ]
+    },
+    {
+      "id": "O2",
+      "title": "Inventory acceptance soundness",
+      "claim": "For nonempty inventory, validate_inventory returning Ok establishes that state.units is structurally compatible with the destination unit set. Separately, either an empty inventory is intentionally acceptable without validation or restore enforces the omitted compatibility condition.",
+      "why_blocking": "The body treats empty and nonempty inventories differently, leaving the accepted-snapshot domain ambiguous.",
+      "kind": "callee_contract_or_executable_attack",
+      "suggested_callees": [
+        {
+          "symbol": "state_units.validate_inventory",
+          "file_hint": "implementation of the state_units type used by LoadedVm",
+          "reason": "Its contract must define the compatibility guarantee obtained from successful validation."
+        },
+        {
+          "symbol": "state_units.restore",
+          "file_hint": "implementation of the state_units type used by LoadedVm",
+          "reason": "Its contract or an incompatible-empty-inventory test can determine whether skipped validation is safe."
+        }
+      ]
+    },
+    {
+      "id": "O3",
+      "title": "Destination-owned frame preservation",
+      "claim": "On successful validation and restoration, validate_inventory and state_units.restore modify only snapshot-owned logical state and explicitly permitted restoration metadata; destination preparation, host resources, and destination-specific bindings remain observationally unchanged.",
+      "why_blocking": "The absence of direct assignments in this wrapper does not frame mutations performed by methods of self.state_units.",
+      "kind": "callee_frame_contract",
+      "suggested_callees": [
+        {
+          "symbol": "state_units.validate_inventory",
+          "file_hint": "implementation of the state_units type used by LoadedVm",
+          "reason": "Validation must be observationally read-only or precisely specify any permitted mutation."
+        },
+        {
+          "symbol": "state_units.restore",
+          "file_hint": "implementation of the state_units type used by LoadedVm",
+          "reason": "Restoration must distinguish snapshot-owned updates from preserved destination-owned state."
+        }
+      ]
+    },
+    {
+      "id": "O4",
+      "title": "Accepted-state representation completeness",
+      "claim": "SavedState.units represents exactly the snapshot-owned projection relevant to LoadedVm restoration, while every excluded LoadedVm property is destination-owned, derivable, or otherwise intentionally preserved rather than restored.",
+      "why_blocking": "Even a correct state_units.restore contract cannot prove the parent claim unless the boundary between snapshot-owned and destination-owned state is complete and explicit.",
+      "kind": "proof_lemma",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm snapshot/save path",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "The producer of SavedState can support a save-and-restore projection completeness lemma."
+        }
+      ]
+    },
+    {
+      "id": "O5",
+      "title": "Failure-state atomicity boundary",
+      "claim": "Either validation and restoration failures leave the pre-restore observable state unchanged, or the API explicitly permits a partially modified LoadedVm that requires recovery before reuse.",
+      "why_blocking": "This is not required for the success-only parent claim, but it is required for a complete safe caller-facing contract and cannot be inferred from error propagation.",
+      "kind": "callee_contract_or_executable_attack",
+      "suggested_callees": [
+        {
+          "symbol": "state_units.restore",
+          "file_hint": "implementation of the state_units type used by LoadedVm",
+          "reason": "Only the restoration implementation can establish transactional rollback or characterize partial failure."
+        }
+      ]
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Strong atomic projection restore",
+      "semantic_difference": "Ok guarantees exact observational equality for all snapshot-owned components and preservation of all destination-owned state; Err leaves the pre-call observable state unchanged.",
+      "discriminator": "Inject a failure after at least one unit would have been restored and compare all observable state with the pre-call state; after Ok, compare every snapshot-owned component with project_saved(state.units)."
+    },
+    {
+      "name": "Success-only compositional projection restore",
+      "semantic_difference": "Ok guarantees exact snapshot projection restoration and destination-owned framing, but Err may leave partial changes.",
+      "discriminator": "A successful component-wise comparison must pass, while an injected mid-restore failure is permitted to expose changed snapshot-owned state."
+    },
+    {
+      "name": "Weak delegated restore",
+      "semantic_difference": "Ok means only that optional validation and state_units.restore returned Ok; no component-wise equality, completeness, or destination frame guarantee is promised by this wrapper.",
+      "discriminator": "A mock state_units implementation that returns Ok without changing unit state satisfies this variant but violates both stronger variants."
+    }
+  ],
+  "uncertainties": [
+    "The concrete type and contract of state_units are not supplied.",
+    "The mapping from SavedState.units to snapshot-owned LoadedVm observations is not defined.",
+    "The semantic meaning of an empty inventory is unknown.",
+    "It is unknown whether validate_inventory is observationally pure.",
+    "It is unknown whether restore independently verifies compatibility, restores all units, permits missing or extra units, or is transactional.",
+    "The exact set of destination-owned preparation and bindings is not supplied.",
+    "No caller context defines whether observational equivalence or representation equality is required."
+  ],
+  "recommended_next_step": "Expand O1 first by obtaining a contract for state_units.restore that quantifies over the accepted unit set and specifies both component-wise post-state equality and its mutation frame. Then discharge O2 and O3 to define acceptance and destination preservation, and use O4 to connect those guarantees to the complete LoadedVm snapshot projection."
+}

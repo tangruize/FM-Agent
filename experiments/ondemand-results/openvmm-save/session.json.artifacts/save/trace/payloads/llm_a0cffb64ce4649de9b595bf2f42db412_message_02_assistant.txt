@@ -1,0 +1,235 @@
+{
+  "contract": {
+    "pre_condition": [
+      "self.state_units is initialized and usable for capture.",
+      "The caller has established every quiescence condition required by participating state-unit contracts; this body performs no explicit stop, freeze, lock, generation check, or transactional boundary.",
+      "No mutation may change the participating unit identity domain or snapshot-owned logical values across the capture interval unless StateUnits::save and StateUnits::inventory jointly guarantee a stable-generation view.",
+      "Optional or intentionally unsaved units have a defined omission/default semantics compatible with the intended restore operation."
+    ],
+    "post_condition": [
+      "On success, the function returns SavedState { units, inventory }, where units is exactly the concrete value returned by the completed self.state_units.save().await call and inventory is obtained from self.state_units.inventory() after that save call completes.",
+      "Subject to the StateUnits contracts and the quiescence precondition, units denotes the snapshot-owned logical projection of all participating units, while inventory identifies the compatible unit identity domain for that projection.",
+      "The result does not represent equality with the entire LoadedVm or destination runtime. Prepared memory, host resource bindings, worker channels, and other runtime-owned state are excluded unless a participating state-unit contract explicitly projects them into saved logical state.",
+      "Concrete serialization format, blob identity, and collection order are not semantically observable except where a state-unit or compatibility contract explicitly makes them observable.",
+      "Completeness, coherence, and same-generation correspondence between units and inventory are conditional properties; this body does not establish them independently."
+    ],
+    "failure_condition": [
+      "The function returns the error produced by self.state_units.save().await and does not construct or return a SavedState.",
+      "Because inventory() is evaluated only after save succeeds, this body does not observe or return inventory on the error path.",
+      "The body provides no rollback or atomicity guarantee. StateUnits::save may have inspected, serialized, or otherwise processed a proper subset of units before failing.",
+      "No partial capture is exposed through this return value, but any internal side effects or retained partial work are governed solely by the StateUnits::save contract."
+    ]
+  },
+  "abstraction": {
+    "name": "QuiescentSnapshotProjection",
+    "abstract_state": {
+      "observable_state": "A pair (I, V), where I is the inventory/identity domain of participating state units and V maps each intentionally captured identity in I to its snapshot-owned logical component state.",
+      "identity_domain": "I records unit identities, kinds, versions, dependencies, or other compatibility metadata required to interpret and restore V.",
+      "captured_values": "V contains logical state values, not serialization-buffer identity, incidental blob layout, iteration order, or runtime object identity.",
+      "excluded_state": "Destination-owned and host-owned runtime state, including prepared memory, host bindings, worker channels, and other reconstruction infrastructure, unless explicitly owned by a state-unit snapshot contract.",
+      "completion_status": "Success denotes a complete pair only if StateUnits::save guarantees all required units were captured and inventory denotes that same unit generation; failure denotes no caller-visible snapshot value, not necessarily no work."
+    },
+    "projection": "Project LoadedVm through its participating state units: P(vm) = (Inventory(U, g), {id -> LogicalSnapshot(unit_id, g) | id is required or intentionally present}), for one stable generation g. SavedState is a representation of P(vm), not of vm in full.",
+    "preserved_state": "State outside P(vm) is not asserted equal across save and restore. A later round-trip theorem should require equality only of the snapshot-owned logical projection and should separately require reconstruction or preservation of destination-owned and host-owned state.",
+    "hidden_representation": [
+      "Serialized bytes and encoding details",
+      "Collection and traversal order",
+      "Temporary buffers and partial intermediate results",
+      "Concrete state-unit object identities",
+      "Locks, worker channels, host handles, prepared memory, and destination bindings",
+      "Any omitted optional-unit representation whose semantics are defined as absence or default"
+    ],
+    "observation_boundary": "The concrete body first awaits StateUnits::save to completion and then calls StateUnits::inventory. Therefore its literal observation interval begins when save starts and ends when inventory returns. A single quiescent capture boundary exists only if external quiescence spans this whole interval or the two StateUnits operations share an internal stable generation. The body itself introduces no atomic boundary."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "The body faithfully packages the successful return of StateUnits::save with a subsequently observed inventory.",
+      "evidence": "The units field is initialized by self.state_units.save().await?, and only after success is inventory initialized by self.state_units.inventory().",
+      "disposition": "Established by the shown body."
+    },
+    {
+      "claim": "The returned state is complete for every required participating unit.",
+      "evidence": "No unit enumeration, required-unit check, completeness marker, or cardinality comparison is present in this body.",
+      "disposition": "Not established; requires the StateUnits::save contract and explicit optional/unsaved-unit semantics."
+    },
+    {
+      "claim": "Saved units and inventory belong to one stable generation.",
+      "evidence": "save and inventory are separate observations, and inventory occurs after the awaited save completes. No shared generation token or equality check is visible.",
+      "disposition": "Challenged. A generation-skew bug is plausible if membership can mutate during or after save, but it is not proven from this body."
+    },
+    {
+      "claim": "The function itself establishes quiescence.",
+      "evidence": "The body contains no stop, freeze, synchronization, or validation operation.",
+      "disposition": "Refuted for the shown body; quiescence must be a caller precondition or a guarantee internal to StateUnits::save."
+    },
+    {
+      "claim": "Holding &mut self prevents every relevant concurrent mutation.",
+      "evidence": "The exclusive Rust borrow prevents ordinary aliasing through LoadedVm during the call, but the shown code does not rule out independently owned workers, channels, interior mutability, or host-driven changes.",
+      "disposition": "Not established."
+    },
+    {
+      "claim": "Failure is atomic and leaves no partial effects.",
+      "evidence": "The ? operator suppresses construction of SavedState after an error, but no rollback is performed.",
+      "disposition": "Not established; only caller-visible result atomicity is evident."
+    },
+    {
+      "claim": "Serialization order and blob representation are irrelevant to snapshot semantics.",
+      "evidence": "This body forwards an opaque units result and does not inspect ordering or encoding.",
+      "disposition": "Suitable abstraction, but representation independence requires StateUnits and restore contracts."
+    },
+    {
+      "claim": "Optional or unsaved units are intentionally represented rather than accidentally omitted.",
+      "evidence": "The body neither classifies units nor validates omissions.",
+      "disposition": "Unresolved; omission semantics must be specified by the StateUnits::save and inventory contracts."
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Same-generation capture",
+      "claim": "There exists one generation g such that every saved logical unit value and the returned inventory are observations of the participating state-unit set at g.",
+      "why_blocking": "Without this property, inventory may describe a different compatible-unit domain than the saved values, preventing a coherent snapshot interpretation and a restore round-trip theorem.",
+      "kind": "callee contract or proof lemma",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::save",
+          "file_hint": "state-unit implementation defining save",
+          "reason": "Determine whether capture pins membership, records a generation, or otherwise guarantees a stable identity domain."
+        },
+        {
+          "symbol": "StateUnits::inventory",
+          "file_hint": "state-unit implementation defining inventory",
+          "reason": "Determine whether inventory is immutable, generation-tagged, or derived from the exact set used by save."
+        }
+      ]
+    },
+    {
+      "id": "O2",
+      "title": "Quiescent logical values",
+      "claim": "All snapshot-owned logical values are observed at one valid quiescent boundary, or concurrent evolution is linearized to an equivalent single boundary.",
+      "why_blocking": "Per-unit values captured at incompatible times can form a state that never existed and may violate cross-unit invariants after restore.",
+      "kind": "caller protocol plus callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::save",
+          "file_hint": "state-unit implementation defining save",
+          "reason": "Establish whether save linearizes capture or assumes units have already been stopped."
+        }
+      ]
+    },
+    {
+      "id": "O3",
+      "title": "Required-unit completeness",
+      "claim": "On success, every required participating identity in the applicable inventory has exactly one semantically valid captured value, except identities whose contracts intentionally define omission.",
+      "why_blocking": "A successful but partial unit map cannot support a complete projection restore unless missing values have explicit semantics.",
+      "kind": "callee contract or executable fault-injection test",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::save",
+          "file_hint": "state-unit implementation defining save",
+          "reason": "Specify iteration, required-unit handling, duplicate detection, and success criteria."
+        }
+      ]
+    },
+    {
+      "id": "O4",
+      "title": "Optional and unsaved semantics",
+      "claim": "For every optional, skipped, stateless, or unsaved unit, inventory and restore define whether absence means default initialization, destination preservation, incompatibility, or intentional non-participation.",
+      "why_blocking": "The round-trip projection cannot distinguish intended omission from lost state without a total interpretation of absence.",
+      "kind": "specification lemma",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::save",
+          "file_hint": "state-unit implementation defining save",
+          "reason": "Identify how optional or non-saving units are represented in captured state."
+        },
+        {
+          "symbol": "StateUnits::inventory",
+          "file_hint": "state-unit implementation defining inventory",
+          "reason": "Identify whether omitted units remain in the identity domain and how their capability is recorded."
+        }
+      ]
+    },
+    {
+      "id": "O5",
+      "title": "Failure and partial-work semantics",
+      "claim": "If any unit capture fails, no SavedState is returned; any already-performed work cannot be mistaken for a committed snapshot, and internal side effects satisfy a documented retry or cleanup policy.",
+      "why_blocking": "The body prevents a returned partial value but does not ensure safe retry, rollback, or absence of unit-visible side effects.",
+      "kind": "callee contract or executable attack",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::save",
+          "file_hint": "state-unit implementation defining save",
+          "reason": "Characterize ordering, side effects, retained buffers, cleanup, and retry behavior after a mid-capture error."
+        }
+      ]
+    },
+    {
+      "id": "O6",
+      "title": "Representation independence",
+      "claim": "Two SavedState values that encode the same inventory domain and logical per-unit values are observationally equivalent despite serialization bytes, map order, or traversal order, except for explicitly versioned representation constraints.",
+      "why_blocking": "A projection round-trip theorem should compare logical state rather than incidental encoding details.",
+      "kind": "abstraction or refinement lemma",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::save",
+          "file_hint": "state-unit serialization implementation",
+          "reason": "Connect concrete saved blobs to logical unit-state values."
+        }
+      ]
+    },
+    {
+      "id": "O7",
+      "title": "Snapshot ownership boundary",
+      "claim": "Each captured field is classified as snapshot-owned logical state, while destination-owned or host-owned runtime resources are excluded or represented only through portable logical descriptors.",
+      "why_blocking": "Restore equivalence must not demand equality of host handles, channels, prepared memory, or other runtime artifacts, and must not accidentally serialize nonportable bindings.",
+      "kind": "state-unit contract audit",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::save",
+          "file_hint": "state-unit save contracts and implementations",
+          "reason": "Establish the ownership and portability of each unit's projected state."
+        }
+      ]
+    },
+    {
+      "id": "O8",
+      "title": "Restore projection round-trip",
+      "claim": "For compatible inventory I and logical projection V, restoring a concrete SavedState representation of (I, V) into a valid destination and then projecting the restored VM yields (I, V), modulo documented optional/default equivalences.",
+      "why_blocking": "This is the desired composition theorem; save alone only supplies one side of the relation.",
+      "kind": "composition proof lemma",
+      "suggested_callees": []
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Strong atomic snapshot",
+      "semantic_difference": "Success represents all required participating units and inventory from one internally linearized generation, without requiring external quiescence beyond invoking save in an allowed lifecycle state.",
+      "discriminator": "StateUnits::save and inventory expose or prove a shared generation/lock transaction, and a mutation injected concurrently with capture is either excluded or wholly ordered before or after the returned snapshot."
+    },
+    {
+      "name": "Caller-quiesced coherent snapshot",
+      "semantic_difference": "Success is coherent and complete only when the caller freezes both unit membership and snapshot-owned values for the entire interval from save invocation through inventory observation.",
+      "discriminator": "No internal atomic generation exists, but lifecycle or synchronization evidence proves mutation is impossible across the full function call."
+    },
+    {
+      "name": "Weak packaging contract",
+      "semantic_difference": "Success means only that one StateUnits::save call completed and its opaque result was paired with inventory observed afterward; completeness, cross-unit coherence, and same-generation identity are not promised.",
+      "discriminator": "Neither a shared internal generation nor a caller-enforced quiescence protocol can be established."
+    }
+  ],
+  "uncertainties": [
+    "Whether StateUnits::save captures units sequentially, concurrently, or from a previously frozen view.",
+    "Whether StateUnits::inventory is immutable for the lifetime of LoadedVm or can change through registration, removal, replacement, or interior concurrency.",
+    "Whether save and inventory carry an implicit or explicit generation identifier.",
+    "Whether caller lifecycle rules guarantee workers and devices are stopped before LoadedVm::save is invoked.",
+    "Whether cross-unit invariants require a globally simultaneous observation rather than individually consistent unit snapshots.",
+    "Which units are required, optional, stateless, destination-owned, or intentionally unsaved.",
+    "Whether a successful StateUnits::save can omit failed or unsupported units while still returning Ok.",
+    "Whether StateUnits::save has side effects and whether a failed capture can be retried safely.",
+    "Whether inventory records compatibility metadata sufficient to interpret every saved unit value.",
+    "Whether restore treats collection order or concrete serialization representation as observable.",
+    "Whether host resources are represented by portable logical descriptors or accidentally embedded as runtime-specific state."
+  ],
+  "recommended_next_step": "Expand O1 first by obtaining only the contracts of StateUnits::save and StateUnits::inventory, then determine whether the strong atomic variant or the caller-quiesced variant is supportable. If neither establishes a shared stable generation, retain the weak packaging contract and challenge the design with a concurrent membership-mutation test."
+}

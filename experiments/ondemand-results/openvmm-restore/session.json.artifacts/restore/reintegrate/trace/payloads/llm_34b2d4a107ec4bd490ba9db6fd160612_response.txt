@@ -1,0 +1,45 @@
+{
+  "disposition": "open",
+  "rationale": "The child establishes only sequencing and delegated success: for a nonempty inventory, validation succeeds before restoration, and StateUnits::restore returns Ok. It does not prove the required identity coverage, saved-value equality, active-versus-deferred semantics, or mutation frame. Therefore it cannot establish that every snapshot-owned component matches accepted saved_state or that destination-owned preparation and bindings are preserved.",
+  "caller_effect": "After LoadedVm::restore returns Ok, it is supported only that any required nonempty-inventory validation completed successfully and StateUnits::restore(state.units) returned Ok. The stronger parent claim of exact compositional snapshot projection restoration with preservation of destination-owned state remains unsupported. The empty-inventory acceptance path also remains unresolved.",
+  "remaining_gap": "A contract for StateUnits::restore must define identity-indexed coverage, handling of missing, duplicate, unknown, and extra identities, restored values, and activation timing. StateUnits::validate_inventory must define the compatibility guarantee and an observationally read-only frame, including the empty-inventory legacy path. Both callees must frame destination-owned preparation, resources, identities, and bindings. The save and orchestration paths must then prove that SavedState.units covers every snapshot-owned component governed by LoadedVm::restore and that any remaining snapshot fields are restored separately.",
+  "proof_map_updates": [
+    {
+      "from": "restore_snapshot_state.O1",
+      "to": "LoadedVm::restore",
+      "status": "expanded_not_discharged",
+      "effect": "LoadedVm::restore proves validation-before-restore sequencing and delegated StateUnits::restore success, but not the parent projection or framing claim."
+    },
+    {
+      "from": "LoadedVm::restore.O1",
+      "to": "StateUnits::restore",
+      "status": "open",
+      "effect": "Requires precise identity-indexed restoration, coverage, and active-versus-deferred semantics."
+    },
+    {
+      "from": "LoadedVm::restore.O2",
+      "to": "StateUnits::validate_inventory",
+      "status": "open",
+      "effect": "Requires a defined compatibility guarantee for nonempty inventory."
+    },
+    {
+      "from": "LoadedVm::restore.O2",
+      "to": "StateUnits::restore or caller legacy invariant",
+      "status": "open",
+      "effect": "Requires justification of the empty-inventory acceptance path."
+    },
+    {
+      "from": "LoadedVm::restore.O3",
+      "to": "StateUnits::validate_inventory and StateUnits::restore",
+      "status": "open",
+      "effect": "Requires explicit mutation frames preserving destination-owned preparation and bindings."
+    },
+    {
+      "from": "LoadedVm::restore.O4",
+      "to": "LoadedVm save path and restore_snapshot_state",
+      "status": "open",
+      "effect": "Requires proof that the StateUnits projection composes with all other snapshot-owned fields."
+    }
+  ],
+  "parent_contract_revision": null
+}

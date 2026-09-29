@@ -48,7 +48,7 @@ class ConfigWizardError(RuntimeError):
 
 
 ApiStyle = Literal["openai", "anthropic"]
-_BACKENDS = ("opencode", "auto", "codex-cli", "claude-cli")
+_BACKENDS = ("copilot-cli", "opencode", "auto", "codex-cli", "claude-cli")
 _EFFORTS = ("", "low", "medium", "high")
 _LLM_TOML_KEYS = ("name", "provider", "base_url", "backend", "effort", "api_style")
 _TOML_KEY_BY_ENV_KEY = {
@@ -852,21 +852,23 @@ def _prompt_yes_no(prompt: str, default: bool = True) -> bool:
 def _prompt_backend() -> str:
     print()
     print("Model backend:")
-    print("  1. OpenCode")
-    print("  2. Auto-detect local Codex or Claude CLI")
-    print("  3. Codex CLI")
-    print("  4. Claude CLI")
+    print("  1. GitHub Copilot CLI")
+    print("  2. OpenCode")
+    print("  3. Auto-detect local Copilot, Codex, or Claude CLI")
+    print("  4. Codex CLI")
+    print("  5. Claude CLI")
     selected = _prompt("Select", "1")
     backends = {
-        "1": "opencode",
-        "2": "auto",
-        "3": "codex-cli",
-        "4": "claude-cli",
+        "1": "copilot-cli",
+        "2": "opencode",
+        "3": "auto",
+        "4": "codex-cli",
+        "5": "claude-cli",
     }
     try:
         return backends[selected]
     except KeyError as exc:
-        raise ConfigWizardError("Backend selection must be 1, 2, 3, or 4.") from exc
+        raise ConfigWizardError("Backend selection must be 1, 2, 3, 4, or 5.") from exc
 
 
 def prompt_for_config() -> tuple[LLMConfigInput, bool]:
@@ -1138,7 +1140,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     set_parser.add_argument(
         "--backend",
         choices=_BACKENDS,
-        help="model backend: opencode, auto, codex-cli, or claude-cli",
+        help="model backend: copilot-cli, opencode, auto, codex-cli, or claude-cli",
     )
     set_parser.add_argument(
         "--effort",

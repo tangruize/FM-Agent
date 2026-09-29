@@ -1,0 +1,295 @@
+{
+  "contract": {
+    "pre_condition": "Caller-usable intended contract for VirtMemoryManager::try_unmap_upage: the manager denotes a live address-space identity A; vaddr is page-aligned; and the world satisfies the common coherent-representation/readiness invariant connecting A's logical user-page mappings, page metadata, backing-owner accounting, software page tables, hardware translations, and cleanup structures. For the valid-page case, all internal lookups, conversions, leaf removal, hardware mirroring, and empty-table cleanup operations must be provably non-failing. The weaker body-local contract requires only the typed alignment and the conditions individually required by operations reached along the executed path; it consequently permits internal errors and partial mutation.",
+    "post_condition": "Under the intended total contract, if vaddr is outside A's valid user range, the function returns the designated invalid-range error (represented by BadAddress in the supplied implementation) and leaves the entire observed world unchanged. If vaddr is valid but has no mapping in A, it returns Ok(None) and preserves the world. If vaddr maps in A to logical page view P = (backing identity B, permissions and page metadata), it returns Ok(Some(owner-for-B)), removes exactly A's mapping and metadata for vaddr, removes exactly the corresponding software and hardware translation, and preserves every other mapping. B's contents remain unchanged. B remains in the logical backing store while any mapping in any address space or any detached retained owner exists; otherwise the returned value or associated ownership transition must account for the final ownership and reclamation protocol. Physical allocator/resource conservation is a separate postcondition and follows only from explicit ownership and allocator contracts. The supplied body locally justifies less: on Ok(Some(UserFrame::new(f))) it found f, checked the selected leaf against f, successfully unmapped that leaf, invoked hardware unmapping, and completed any required empty-table cleanup before returning; it does not by itself establish logical backing identity, permissions, last-owner behavior, allocator conservation, or the absence of internal failures under the intended readiness invariant.",
+    "failure_condition": "An address outside user space returns BadAddress before body-visible mutation and is intended to be an unchanged-state invalid-range failure. Under the intended coherent-representation/readiness precondition for a valid user page, other Err results and both panic sites are contract violations and must be proved unreachable rather than exposed as ordinary outcomes. Body-locally, errors can still arise from frame search, address construction, directory or table lookup, leaf lookup or removal, and directory cleanup. Failure atomicity is not established: in particular, pgdir.unmap may syntactically return Err after the leaf mapping, hardware translation, and user_page_tables entry have been removed. A lookup mismatch panics through unreachable!, and inconsistent table membership panics through expect."
+  },
+  "abstraction": {
+    "name": "Lifecycle-scoped user-page mappings with shared backing ownership",
+    "abstract_state": "The world contains: (1) for each live address-space identity A, a partial map U_A from valid user virtual pages to logical page views containing backing identity B, permissions, and page metadata; (2) a backing store S mapping each live B to its contents and logical ownership state, including mappings across all address spaces and detached retained owners; (3) physical allocator/resource authority R, observed separately from logical mapping equality; (4) hidden software and hardware page-table representations and cleanup metadata; and (5) lifecycle state identifying which address spaces are live and which manager instance denotes A.",
+    "projection": "For a live manager denoting A, U_A(v) = (B, permissions, metadata) exactly when the authoritative logical metadata and coherent page-table representation identify the same mapping at v. The raw FrameAddress used by the supplied implementation is a representation-level locator for B, not the complete logical page view. Software leaf entries, hardware translations, try_find_user_frame results, page-directory entries, and user_page_tables membership must agree with this projection under the readiness invariant. Backing-store membership is projected from global mapped-owner and retained-owner state, not merely from whether A still maps B.",
+    "preserved_state": "A successful mapped-page removal preserves U_A at every page other than vaddr; all mappings and metadata in every other address space; the removed backing's contents; unrelated backings and ownership counts; unrelated software and hardware translations; lifecycle identities; and unrelated allocator authority. Removing A's mapping changes only the ownership contribution associated with that mapping. The backing remains logically live if another mapped or retained owner exists. Any last-owner transition and physical reclamation must follow separate ownership and allocator rules. Ok(None) and invalid-range failure preserve all components of the observed world under the intended contract. These frame properties require callee and representation contracts beyond the supplied body.",
+    "hidden_representation": "Raw frame addresses; pgdir entries; user_page_tables ordering and membership; PageTable leaf entries and nmapped counters; hardware page-table entries; address-wrapper conversions; metadata searched by try_find_user_frame; backing-owner counters or registries; detached-owner representation; allocator free lists; and generation or lifecycle tokens are hidden unless they affect a caller-visible mapping, ownership, resource, error, panic, or translation observation.",
+    "observation_boundary": "The caller-facing boundary includes the Result<Option<UserFrame>, Error>, the logical mapping U_A and page metadata, backing identity and contents, global mapped and retained ownership sufficient to determine backing-store liveness, software/hardware translation behavior, address-space lifecycle identity, and physical allocator/resource authority as a distinct world-level observation. Logical mapping equality alone does not imply allocator equality or conservation. Internal table layout, vector order, counters, and empty-table allocation remain hidden when they cannot affect those observations."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "An invalid user address produces the intended unchanged-state invalid-range failure.",
+      "evidence": "The is_user_addr check is the first operation in the supplied body. Its failing branch immediately returns ErrorCode::BadAddress before any shown mapping, ownership, hardware, or cleanup mutation.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Ok(None) means that the live address space A had no logical page view at vaddr and leaves the observed world unchanged.",
+      "evidence": "The only Ok(None) path is the None result from try_find_user_frame, followed by an immediate return. The body neither defines the relation between that raw-frame search and U_A nor establishes that the search preserves metadata, ownership, backing, allocator, hardware, and lifecycle state.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Ok(Some(owner-for-B)) returns ownership associated with the backing identity previously mapped at vaddr.",
+      "evidence": "The body constructs UserFrame from the FrameAddress returned by try_find_user_frame and checks that the selected PageTable leaf contains the same address. It does not show that this address uniquely and lifecycle-safely denotes logical backing B, what ownership UserFrame carries, or how permissions and page metadata are recovered.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "On successful mapped-page removal, exactly A's logical mapping and metadata at vaddr are removed while mappings in other address spaces are preserved.",
+      "evidence": "The selected leaf is unmapped and the corresponding hardware unmap is invoked. No supplied contract connects those representation operations to per-space metadata or proves preservation of mappings that share the same backing in other address spaces.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Backing contents are preserved and backing-store removal occurs exactly on the last mapped-or-retained owner transition.",
+      "evidence": "The body does not inspect backing contents, global mappings, retained owners, or a backing store. UserFrame::new may participate in an ownership transfer, but its semantics are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Physical allocator/resource conservation follows from successful unmapping.",
+      "evidence": "No allocator operation or resource-authority transition is shown. Returning UserFrame may transfer physical authority rather than free it, so allocator conservation is independent of logical mapping removal.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "For every valid mapped user page satisfying the common coherent-representation/readiness precondition, the function returns Ok(Some(...)) without internal lookup or cleanup errors.",
+      "evidence": "The intended precondition is meant to exclude internal failures, but the body contains fallible frame search, address conversion, page-table lookup and unmap, and pgdir.unmap operations. Their unreachability requires external contracts and lemmas.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "For every valid unmapped user page satisfying the readiness precondition, the function returns Ok(None) without internal errors.",
+      "evidence": "This follows syntactically only if try_find_user_frame returns None. Its exact correspondence to logical absence and its non-failure under coherent valid state are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "All Err outcomes preserve the observed world.",
+      "evidence": "The empty-table path removes the leaf, invokes hardware unmapping, removes the user_page_tables entry, and only then calls fallible pgdir.unmap. An Err at that point can expose a partially updated representation and ownership state.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "The unreachable! and expect sites cannot panic under the intended valid-state invariant.",
+      "evidence": "Both sites depend on agreement among try_find_user_frame, the selected table, pgdir, and user_page_tables. That agreement is the intended invariant but is not established by this body.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Empty page-table cleanup changes no logical page mapping or backing ownership beyond the selected mapping.",
+      "evidence": "Cleanup is conditional on page_table.nmapped() == 0 and removes the table from user_page_tables and pgdir. Exact counter semantics, unique membership, and directory-unmap preservation are not supplied.",
+      "disposition": "unknown"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Search-to-projection correspondence",
+      "claim": "For a live manager denoting A in a coherent ready state, try_find_user_frame(v) returns Some(f) exactly when U_A(v) is a logical page view whose backing identity is represented by f, returns None exactly when v is absent from U_A, and cannot return an operational or representation error for a valid user page.",
+      "why_blocking": "This gives caller-level meaning to Ok(None) and the raw address used to construct the returned UserFrame, and establishes that internal search errors are unreachable under the intended precondition.",
+      "kind": "callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::try_find_user_frame",
+          "file_hint": "definition of Vmem::try_find_user_frame",
+          "reason": "Relate raw frame lookup to the lifecycle-scoped logical page view and prove non-failure in coherent ready states."
+        }
+      ]
+    },
+    {
+      "id": "O2",
+      "title": "Search frame condition",
+      "claim": "try_find_user_frame preserves all per-space mappings and metadata, backing identities and contents, mapped and retained ownership, allocator authority, page-table representations, hardware translations, and lifecycle state.",
+      "why_blocking": "Without this frame condition, neither the early Ok(None) result nor pre-removal lookup can be treated as observationally read-only.",
+      "kind": "callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::try_find_user_frame",
+          "file_hint": "definition of Vmem::try_find_user_frame",
+          "reason": "Establish observational purity despite the mutable receiver."
+        }
+      ]
+    },
+    {
+      "id": "O3",
+      "title": "Leaf unmap semantics",
+      "claim": "Given the selected table entry for A and v, successful PageTable::unmap removes exactly that leaf representation, preserves every other leaf, and updates nmapped to the exact remaining leaf count. Under the intended readiness invariant it cannot fail; otherwise its error-side mutation behavior must be documented.",
+      "why_blocking": "This is the central representation transition and is required both for exact logical removal and for proving that empty-table cleanup is safe and non-failing.",
+      "kind": "callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "PageTable::unmap",
+          "file_hint": "PageTable implementation used by Vmem",
+          "reason": "Establish exact removal, preservation, non-failure under readiness, and behavior outside that precondition."
+        },
+        {
+          "symbol": "PageTable::nmapped",
+          "file_hint": "PageTable implementation used by Vmem",
+          "reason": "Establish that zero exactly characterizes a table with no remaining leaf mappings."
+        }
+      ]
+    },
+    {
+      "id": "O4",
+      "title": "Representation agreement invariant",
+      "claim": "For each logical mapping U_A(v), search metadata, raw backing locator, aligned directory entry, selected PageTable leaf, user_page_tables membership, and hardware translation agree. The selected table is unique, and if it becomes empty its address occurs exactly once in user_page_tables.",
+      "why_blocking": "This connects the richer logical model to the representation actually mutated, excludes both panic sites, and makes internal lookup failures unreachable.",
+      "kind": "proof lemma",
+      "suggested_callees": []
+    },
+    {
+      "id": "O5",
+      "title": "Empty-table cleanup preservation",
+      "claim": "When the selected table has no remaining leaves, removing its unique user_page_tables entry and calling pgdir.unmap removes only empty representation structure, preserves every logical mapping and backing owner other than the already removed target mapping, and cannot fail under the coherent-readiness invariant.",
+      "why_blocking": "The successful path may remove an entire table representation, while pgdir.unmap is also the principal syntactic post-mutation error point.",
+      "kind": "callee contract and proof lemma",
+      "suggested_callees": [
+        {
+          "symbol": "PageDirectory::unmap",
+          "file_hint": "page-directory implementation used by Vmem",
+          "reason": "Prove exact directory cleanup, preservation, and non-failure for a present empty selected table."
+        }
+      ]
+    },
+    {
+      "id": "O6",
+      "title": "Hardware mirror correspondence",
+      "claim": "hw_unmap_user(v) removes exactly A's hardware translation for v, preserves all other translations, cannot affect another lifecycle-distinct address space, and leaves hardware state coherent with U_A after successful return.",
+      "why_blocking": "Actual translation is part of the caller-visible world, and lifecycle scoping is necessary to prevent unmapping the same virtual address in a different address space.",
+      "kind": "callee contract or executable attack",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::hw_unmap_user",
+          "file_hint": "architecture-specific Vmem hardware mapping implementation",
+          "reason": "Establish exact, per-address-space hardware unmapping and preservation."
+        }
+      ]
+    },
+    {
+      "id": "O7",
+      "title": "Error-state characterization and unreachability",
+      "claim": "For every fallible operation, either prove that Err is unreachable under the intended coherent-representation/readiness precondition or specify its exact partial-state effect outside that precondition. In particular, prove pgdir.unmap cannot fail after leaf, hardware, and vector removal in a valid ready state; do not infer general failure atomicity from the intended total contract.",
+      "why_blocking": "This separates the desired caller contract from the weaker body-local behavior and addresses the explicit post-mutation failure point.",
+      "kind": "callee contract or executable attack",
+      "suggested_callees": [
+        {
+          "symbol": "PageDirectory::unmap",
+          "file_hint": "page-directory implementation used by Vmem",
+          "reason": "Establish readiness-based non-failure and characterize effects if its precondition is violated."
+        },
+        {
+          "symbol": "Vmem::lookup_user_page_table",
+          "file_hint": "definition of Vmem::lookup_user_page_table",
+          "reason": "Prove lookup success and uniqueness under the common representation invariant."
+        }
+      ]
+    },
+    {
+      "id": "O8",
+      "title": "Logical page metadata transition",
+      "claim": "Removing v from A removes exactly its logical page view, including permissions and per-page metadata, without altering metadata for any other page or address space; the raw FrameAddress comparison is sufficient to identify the backing component but not to erase the richer metadata model.",
+      "why_blocking": "The supplied body operates on a raw leaf and does not show where logical page metadata lives or how it is synchronized with leaf removal.",
+      "kind": "representation lemma",
+      "suggested_callees": [
+        {
+          "symbol": "VirtMemoryManager::try_unmap_upage",
+          "file_hint": "caller or wrapper around the supplied Vmem unmap implementation",
+          "reason": "Specify and connect caller-visible logical metadata removal to the lower-level unmap result."
+        }
+      ]
+    },
+    {
+      "id": "O9",
+      "title": "Backing ownership and last-owner reclamation",
+      "claim": "Unmapping A:v removes exactly one mapped-owner contribution for backing B. B and its contents remain in the logical backing store while any mapping in any address space or detached retained owner exists. If no owner remains, the ownership protocol performs the unique permitted final transition, with the returned UserFrame's role stated explicitly.",
+      "why_blocking": "Without global owner accounting, the contract cannot distinguish removing one shared mapping from reclaiming the backing or creating duplicate ownership.",
+      "kind": "callee contract and world invariant",
+      "suggested_callees": [
+        {
+          "symbol": "UserFrame::new",
+          "file_hint": "definition of UserFrame and its ownership/drop semantics",
+          "reason": "Determine whether construction transfers, creates, or merely wraps authority for the removed backing."
+        },
+        {
+          "symbol": "VirtMemoryManager::try_unmap_upage",
+          "file_hint": "caller-level unmap implementation and backing-store management",
+          "reason": "Locate mapped-owner removal, retained-owner handling, and last-owner backing-store transition."
+        }
+      ]
+    },
+    {
+      "id": "O10",
+      "title": "Allocator and resource conservation",
+      "claim": "State separately how successful unmapping changes physical resource authority: whether authority moves into the returned UserFrame, remains with a retained owner, or is returned to an allocator on the final-owner transition. Prove conservation and absence of leaks, double frees, and duplicate authority independently of logical mapping equality.",
+      "why_blocking": "A correct logical unmap can still violate world-level resource conservation, and the supplied body contains no visible allocator transition.",
+      "kind": "resource invariant and callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "UserFrame",
+          "file_hint": "UserFrame ownership, Drop, and allocator integration",
+          "reason": "Specify physical authority represented by the returned value and its eventual release."
+        },
+        {
+          "symbol": "FrameAllocator",
+          "file_hint": "allocator used for user-frame allocation and reclamation",
+          "reason": "Establish the world-level conservation law and final-owner reclamation behavior."
+        }
+      ]
+    },
+    {
+      "id": "O11",
+      "title": "Lifecycle and address-space identity",
+      "claim": "The manager remains live throughout the operation and uniquely denotes address space A; all logical, software, and hardware operations are scoped to that same identity, including across address-space destruction, reuse, or generation changes.",
+      "why_blocking": "A virtual address and raw frame address alone do not identify which address-space mapping is removed, especially if manager or page-table resources can be reused.",
+      "kind": "lifecycle invariant",
+      "suggested_callees": [
+        {
+          "symbol": "VirtMemoryManager",
+          "file_hint": "manager lifecycle, construction, destruction, and address-space identity definitions",
+          "reason": "Establish stable identity and liveness across try_unmap_upage."
+        }
+      ]
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Intended total ready-state contract",
+      "semantic_difference": "For a live address space satisfying coherent representation and readiness, a valid mapped page must return Ok(Some(owner-for-B)), a valid unmapped page must return Ok(None), and all internal lookup, removal, and cleanup errors and panics are unreachable. It specifies exact per-space mapping removal, shared-backing preservation or last-owner transition, hardware coherence, and separate resource conservation.",
+      "discriminator": "Prove every question-mark operation, explicit readiness branch, unreachable!, and expect site non-failing for all states satisfying the stated invariant, then verify shared-backing and retained-owner cases."
+    },
+    {
+      "name": "Weaker body-local successful-result contract",
+      "semantic_difference": "Claims only what follows after a returned result: BadAddress is mutation-free in the shown body; Ok(None) reflects try_find_user_frame returning None; and Ok(Some(f)) follows successful raw-leaf removal, hardware-unmap invocation, and completed cleanup. It permits internal Err outcomes, possible post-mutation partial states, and makes no independent claim about logical metadata, backing liveness, or allocator authority.",
+      "discriminator": "Inject a pgdir.unmap failure after removing the last leaf. This variant permits Err with partial mutation, while the intended total contract requires that failure to be unreachable in a ready state."
+    },
+    {
+      "name": "Failure-atomic recovery contract",
+      "semantic_difference": "Adds rollback or transactional behavior so every Err preserves logical mappings, backing ownership, software and hardware translations, and resource authority. This is stronger than both the intended ready-state contract and the supplied body's currently justified behavior.",
+      "discriminator": "Force any post-leaf-removal operation to fail and compare the complete pre- and post-world, including table membership and hardware translation."
+    },
+    {
+      "name": "Logical-only unmap contract",
+      "semantic_difference": "Observes per-space mappings, metadata, and backing contents but excludes allocator authority and possibly hardware translation from equality. It can declare two states equivalent despite different physical-resource ownership or translation behavior and is therefore insufficient for the requested world-level contract.",
+      "discriminator": "Compare two executions with identical U_A and backing contents but different allocator free lists, returned-frame authority, or hardware entries."
+    }
+  ],
+  "uncertainties": [
+    "The supplied function is named unmap, while the requested caller-facing symbol is VirtMemoryManager::try_unmap_upage; their exact call relationship and division of metadata and ownership responsibilities are not shown.",
+    "The representation and location of permissions and per-page metadata are absent from the supplied source.",
+    "The mapping from FrameAddress to stable logical backing identity is unknown, including whether frame reuse requires a generation or lifecycle token.",
+    "UserFrame::new ownership semantics are unknown: it may transfer unique authority, create a retained owner, or merely wrap a raw address.",
+    "The backing store and global mapped-versus-retained owner accounting are not shown.",
+    "It is unknown whether last-owner reclamation occurs during unmap, when the returned UserFrame is dropped, or in a higher-level caller.",
+    "The allocator/resource authority model and its caller-visible observations are not supplied.",
+    "The callee contracts needed to prove internal errors and panic sites unreachable under readiness are not supplied.",
+    "The exact invalid-range error required by the caller API is unnamed; the implementation uses ErrorCode::BadAddress.",
+    "It is unknown whether hw_unmap_user can fail internally, flushes relevant translation caches, or is scoped by a stable address-space identity.",
+    "Address-space destruction and identity reuse rules are absent."
+  ],
+  "recommended_next_step": "Adopt the intended total ready-state contract for VirtMemoryManager::try_unmap_upage, but retain the weaker body-local contract as the current proof boundary. First discharge O1, O2, O3, O4, O5, and O7 to prove that valid ready states cannot reach internal errors or panics. Then connect the lower-level raw-frame operation to logical metadata, shared-backing ownership, lifecycle identity, and resource authority through O8 through O11. In particular, inspect the caller-level try_unmap_upage path and UserFrame ownership semantics before asserting last-owner reclamation or allocator conservation.",
+  "refinement_changes": [
+    "Replaced the raw partial map from virtual pages to FrameAddress with per-address-space logical page views containing backing identity, permissions, and page metadata.",
+    "Separated logical backing identity and immutable contents from raw frame-address representation.",
+    "Added global mapped-owner and detached retained-owner state so unmapping one address space does not imply backing reclamation.",
+    "Changed backing-removal semantics to occur only at the final mapped-or-retained owner transition, subject to the returned UserFrame ownership protocol.",
+    "Separated physical allocator and resource authority from logical mapping equality and added an independent conservation obligation.",
+    "Separated page-table representation and empty-table cleanup from the caller-visible logical mapping model.",
+    "Added live address-space identity and lifecycle scoping to prevent conflating equal virtual or frame addresses across manager lifetimes.",
+    "Strengthened the intended valid-page precondition to include coherent representation and readiness sufficient to make internal lookup, removal, cleanup errors, and panic sites unreachable.",
+    "Preserved the explicit proof gap for post-mutation fallible directory cleanup instead of assuming failure atomicity.",
+    "Refined invalid user-address behavior into an unchanged-world invalid-range failure, tied to the implementation's BadAddress branch.",
+    "Distinguished the intended total caller contract from the weaker successful-result and error behavior justified by the supplied body.",
+    "Expanded the observation boundary to include logical metadata, backing liveness and contents, hardware translation, lifecycle identity, and separately observed allocator authority.",
+    "Reframed the returned UserFrame as an ownership-bearing value whose exact relationship to backing identity and reclamation remains an explicit proof obligation.",
+    "Preserved obligation IDs O1 through O7 where their core meanings remain unchanged and enriched them for the new logical model.",
+    "Added obligations O8 through O11 for page metadata, global backing ownership, allocator conservation, and lifecycle identity."
+  ]
+}

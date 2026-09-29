@@ -1,0 +1,48 @@
+FUNCTION:
+restore at openvmm/openvmm_core/src/worker/dispatch.rs:4743-4749
+
+INTENT:
+Analyze this callee only to address the parent obligation:
+{"id": "O1", "title": "Compositional snapshot projection restore", "claim": "After LoadedVm::restore returns Ok, every snapshot-owned component has the state represented by accepted saved_state, while destination-owned preparation and bindings are framed.", "why_blocking": "This is the central state-equality claim and cannot be inferred merely from passing saved_state to a callee.", "kind": "callee_contract", "suggested_callees": [{"symbol": "LoadedVm::restore", "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs", "reason": "It directly consumes saved_state and must provide the aggregate restore and framing contract."}], "status": "open"}
+
+CALLER CONTEXT:
+(not supplied)
+
+PARENT BLOCKING OBLIGATION:
+{
+  "id": "O1",
+  "title": "Compositional snapshot projection restore",
+  "claim": "After LoadedVm::restore returns Ok, every snapshot-owned component has the state represented by accepted saved_state, while destination-owned preparation and bindings are framed.",
+  "why_blocking": "This is the central state-equality claim and cannot be inferred merely from passing saved_state to a callee.",
+  "kind": "callee_contract",
+  "suggested_callees": [
+    {
+      "symbol": "LoadedVm::restore",
+      "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+      "reason": "It directly consumes saved_state and must provide the aggregate restore and framing contract."
+    }
+  ],
+  "status": "open"
+}
+
+SOURCE:
+```rust
+    async fn restore(&mut self, state: SavedState) -> anyhow::Result<()> {
+        if !state.inventory.is_empty() {
+            self.state_units.validate_inventory(&state.inventory)?;
+        }
+        self.state_units.restore(state.units).await?;
+        Ok(())
+    }
+
+```
+
+Return an object with contract {pre_condition, post_condition, failure_condition}, abstraction {name, abstract_state, projection, preserved_state, hidden_representation, observation_boundary}, implementation_assessment [{claim,evidence,disposition}], obligations [{id,title,claim,why_blocking,kind,suggested_callees:[{symbol,file_hint,reason}]}], candidate_variants [{name,semantic_difference,discriminator}], uncertainties [string], and recommended_next_step.
+
+Requirements:
+- Separate what this body establishes from what requires callee contracts.
+- Produce at least one stronger and one weaker candidate variant with a concrete discriminator.
+- The abstraction must identify observable state, its projection, preserved state, hidden representation, and the exact observation boundary.
+- Obligations must be independently selectable for later `expand`; use stable short ids such as O1, O2.
+- Include bug hypotheses as challenged assessments, but do not report an unproved hypothesis as a bug.
+- Prefer obligations that can be discharged by a callee contract, executable attack, or proof lemma.

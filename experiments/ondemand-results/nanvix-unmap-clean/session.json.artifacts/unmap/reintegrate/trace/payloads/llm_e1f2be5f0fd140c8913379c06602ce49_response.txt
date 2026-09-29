@@ -1,0 +1,15 @@
+{
+  "disposition": "open",
+  "rationale": "The child analysis does not prove the required result-to-mapping correspondence. It presents that correspondence only as an intended contract and explicitly leaves unknown whether try_find_user_frame exactly reflects logical mapping presence, whether successful leaf and hardware removal changes exactly the selected abstract mapping, and whether empty-table cleanup preserves all other mappings. These are open child obligations, not established evidence.",
+  "caller_effect": "The child supports only the weaker claim that Ok(None) follows when try_find_user_frame returns None and that Ok(Some(f)) can follow after finding f, matching the selected leaf to f, successfully removing that leaf, invoking hardware unmapping, and completing required cleanup. It does not support the parent claim that Ok(Some(f)) occurs if and only if the pre-state mapping maps v to f, that the post-state is exactly the pre-state mapping with v removed, or that Ok(None) occurs if and only if v was abstractly absent and leaves the mapping relation unchanged.",
+  "remaining_gap": "Prove child O1 and O2 to connect try_find_user_frame results to abstract mapping presence and establish lookup purity; O3 and O4 to connect the unique selected leaf mutation to the logical mapping; O5 to show cleanup preserves the projection; O6 to establish exact hardware-translation removal and framing; and O7 to show relevant valid-state errors and panics are unreachable. Only then can the bidirectional parent correspondence close.",
+  "proof_map_updates": [
+    "Keep try_unmap_upage.O1 open and add an open dependency on unmap.O1 for search-to-projection correspondence.",
+    "Add an open edge from try_unmap_upage.O1 to unmap.O2 because lookup purity is required for the unchanged Ok(None) case.",
+    "Add open edges from try_unmap_upage.O1 to unmap.O3 and unmap.O4 for exact leaf removal and representation agreement.",
+    "Add an open edge from try_unmap_upage.O1 to unmap.O5 for cleanup projection preservation.",
+    "Add an open edge from try_unmap_upage.O1 to unmap.O6 for caller-visible hardware-translation correspondence.",
+    "Add an open edge from try_unmap_upage.O1 to unmap.O7 because internal errors and panics must be unreachable under the parent precondition."
+  ],
+  "parent_contract_revision": null
+}

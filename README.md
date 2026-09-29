@@ -56,7 +56,7 @@ The [website](http://fm-agent.ai/) of FM-Agent provides an online service for re
 - Python 3.12
 - pip >= 23
 - [openai](https://pypi.org/project/openai/) 2.15.0
-- [OpenCode](https://github.com/opencode-ai/opencode) 1.4.6
+- GitHub Copilot CLI (default backend), or [OpenCode](https://github.com/opencode-ai/opencode) 1.4.6
 - [Bun](https://bun.sh/)
 - [oh-my-openagent](https://www.npmjs.com/package/oh-my-openagent) plugin (installed via `bunx`)
 - [@lucentia/opencode-trace](https://www.npmjs.com/package/@lucentia/opencode-trace) plugin — captures raw OpenCode LLM request/response traces (see [Structured Trace](#structured-trace))
@@ -95,7 +95,7 @@ TOML file, stores
 the API key in `.env` plus a private local key file for standalone OpenCode, and syncs the matching OpenCode provider entry in
 `~/.config/opencode/opencode.json` (or the platform-equivalent config path)
 without requiring you to hand-edit JSON.
-If you choose `auto`, `codex-cli`, or `claude-cli` in the wizard, it updates the
+If you choose `copilot-cli`, `auto`, `codex-cli`, or `claude-cli` in the wizard, it updates the
 backend in the active FM-Agent TOML file and clears stale non-secret LLM
 overrides from the project `.env`. Any model and effort values found there are
 first retained in the TOML; no API key or OpenCode provider setup is needed.
@@ -130,7 +130,7 @@ To change just one non-secret LLM setting without manually editing the file,
 use the configuration command. For example, select the local Codex CLI backend:
 
 ```bash
-uv run python src/configure_llm.py set --backend codex-cli
+uv run python src/configure_llm.py set --backend copilot-cli --name gpt-5.6-sol
 ```
 
 It previews and backs up `fm-agent.toml`, then changes only the setting(s) you
@@ -205,6 +205,38 @@ OpenCode may cache the `@latest` package; to force a refresh, remove `~/.cache/o
 ```bash
 uv run python main.py <proj_dir> [--resume] [--all-bugs] [--domain-knowledge FILE ...] [--bug-validator FILE] [--submodule PATH [PATH ...]]
 ```
+
+### On-demand top-down analysis
+
+Use the bounded workflow when one proof target should expand only explicitly selected callees:
+
+```bash
+uv run python -m src.ondemand analyze \
+  --repo /path/to/repository \
+  --session analysis/session.json \
+  --file src/module.rs \
+  --symbol target_function \
+  --intent intent.md
+
+uv run python -m src.ondemand expand \
+  --session analysis/session.json \
+  --parent target_function \
+  --obligation O1 \
+  --file src/callee.rs \
+  --symbol selected_callee
+
+uv run python -m src.ondemand refine \
+  --session analysis/session.json \
+  --node selected_callee \
+  --feedback refinement.md
+
+uv run python -m src.ondemand reintegrate \
+  --session analysis/session.json \
+  --parent target_function \
+  --child selected_callee
+```
+
+The workflow records source hashes, contracts, abstractions, selectable obligations, revision history, caller-child edges, reintegration results, and structured model traces. It never expands suggested callees automatically. For an independent Rust/Verus specification experiment, pass `--strip-verification-annotations` to `analyze` and `expand`; the original source hash and line identity remain recorded.
 
 | Argument                    | Description                                                                                     |
 | --------------------------- | ----------------------------------------------------------------------------------------------- |

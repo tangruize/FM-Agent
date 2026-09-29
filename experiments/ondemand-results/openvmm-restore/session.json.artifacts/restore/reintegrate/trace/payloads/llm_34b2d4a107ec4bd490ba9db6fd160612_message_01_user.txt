@@ -1,0 +1,596 @@
+PARENT FUNCTION:
+restore_snapshot_state
+
+PARENT ANALYSIS:
+{
+  "contract": {
+    "pre_condition": "The caller provides exclusive mutable access to a prepared destination LoadedVm and prevents concurrent start, resume, or mutation of guest execution state. The supplied saved_state is an accepted snapshot whose format, architecture, component identities, resource requirements, and compatibility have already been validated, unless LoadedVm::restore is explicitly responsible for rejecting them. Destination memory, capacity, host-resource bindings, and backend configuration are valid and remain destination-owned. No VP may execute from the first restore-related mutation through successful return; this must follow from an entry invariant, an existing guard, or a surrounding lifecycle protocol because this body stops VPs only at the end. Stable saved VP identities must be mappable to destination VPs, while unmatched destination VPs must have valid initial or default state. If restore_time is Some((downtime, saved_frequency, saved_apic_frequency)), downtime is an authorized restore transformation and the required destination clock frequencies are available and compatible.",
+    "post_condition": "On Ok(()), the VM is at a pre-execution boundary: all VPs are stopped and remain inhibited by restore_start_guard until the surrounding protocol deliberately releases it. The guest-observable projection of snapshot-owned active state equals the accepted saved_state projection after exactly the transformation authorized by restore_time. Pending or deferred snapshot state remains pending or deferred unless an explicit component contract requires activation. Saved VP state is selected by stable identity, and destination VPs absent from the snapshot retain valid initial or default state. If restore_time is None, this body intentionally applies no downtime adjustment. If restore_time is Some, state-unit time, x86_64 VP clock state, and backend snapshot time are advanced by downtime according to their contracts. Prepared destination memory, capacity, compatibility decisions, external-resource bindings, and host operational state are preserved except where an explicit restore contract permits mutation. Success does not imply resume, readiness, or completion of later post-restore work.",
+    "failure_condition": "Err indicates failure of a frequency query or compatibility check, frequency setting, snapshot restoration, time advancement, or required backend query. The body provides no rollback or failure atomicity: destination state may be partially mutated, including an updated TSC configuration, partially restored components, or partially advanced clock domains. Errors before temporarily_stop_vps do not install restore_start_guard, so safety depends on the entry-state no-execution invariant and callee failure contracts. Callers must not assume that Err preserves the pre-call destination state or permits retry unless separate contracts establish those properties."
+  },
+  "abstraction": {
+    "name": "StoppedRestoredGuestProjection",
+    "abstract_state": "A tuple consisting of snapshot-owned active guest state, snapshot-owned pending or deferred state, a partial map of stable VP identity to VP state augmented by valid defaults for unmatched destination VPs, guest-visible clock domains, an execution-inhibited flag, and destination-owned preparation and host-runtime state.",
+    "projection": "Project the concrete LoadedVm into guest-observable snapshot-owned active state, pending or deferred status, VP state keyed by stable identity, guest-visible clock values, and whether any VP can execute. Compare this with the accepted saved_state projection transformed only by the authorized downtime operation. Exclude destination-owned memory preparation, capacity, compatibility decisions, external-resource bindings, and host-runtime details unless an explicit component contract classifies a field as snapshot-owned.",
+    "preserved_state": "Destination VPs not selected by stable snapshot identity retain valid initial or default state. Prepared destination memory, capacity, compatibility decisions, external-resource bindings, and host operational details remain destination-owned. Pending or deferred state remains pending or deferred absent an explicit activation rule.",
+    "hidden_representation": "Concrete state_units internals, partition and partition_unit backend structures, stop-guard representation and nesting, component serialization formats, restore dispatch ordering, profiling spans, and backend bookkeeping that does not affect the defined guest-observable projection.",
+    "observation_boundary": "The instant Ok(()) is produced after temporarily_stop_vps().await completes and its guard is stored in self.restore_start_guard, but before the caller can release or replace that guard, resume VPs, or perform later readiness work. Intermediate async states are outside the success abstraction only if no VP can execute during them."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "Compatibility checks precede snapshot restoration, and explicit downtime adjustments follow successful restoration.",
+      "evidence": "Frequency queries and equality checks occur before self.restore(saved_state).await; state_units.advance_time, x86_64 partition_unit.advance_tsc, and partition.advance_snapshot_time occur afterward.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Successful return occurs only after a stop guard has been acquired and stored.",
+      "evidence": "The final mutation assigns Some(self.inner.partition_unit.temporarily_stop_vps().await) to restore_start_guard before Ok(()). The effect and lifetime of the guard still require its callee contract.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "The implementation preserves the intended no-execution boundary throughout restoration.",
+      "evidence": "The explicit stop operation occurs only after restore and all time adjustments. No supplied evidence establishes that VPs are already stopped during the preceding awaits.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Replacing restore_start_guard cannot transiently resume VPs.",
+      "evidence": "A new guard is acquired before assignment, but assignment may drop a previous guard under Rust replacement semantics; guard composition and Drop behavior are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "All snapshot-owned active state is restored exactly and destination-owned state is preserved.",
+      "evidence": "The body delegates saved_state wholesale to self.restore(saved_state).await, but no contract for that callee is supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Pending or deferred state remains distinct from active restored state.",
+      "evidence": "The body contains no explicit activation or pending-state handling, and the behavior of LoadedVm::restore is not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "VP state is selected by stable identity and unmatched destination VPs retain valid defaults.",
+      "evidence": "No VP mapping logic or relevant callee contract appears in the supplied context.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "restore_time causes the visible restore-time operations to be executed only after successful snapshot restoration.",
+      "evidence": "The restore_time block containing state-unit, x86_64 VP-clock, and backend-clock advancement follows self.restore(saved_state).await and is skipped when restore_time is None.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "The visible restore-time operations constitute exactly one permitted downtime adjustment with no overlap or unrelated mutation.",
+      "evidence": "Three distinct callees perform advancement, but their affected clock domains, arithmetic, overflow behavior, and framing are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "The saved TSC frequency is checked for destination compatibility before restoration.",
+      "evidence": "The body queries the destination TSC frequency, requires equality with saved_frequency, and only then calls self.restore.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Calling set_tsc_frequency_hz with an already-equal value preserves all destination-owned state except intended frequency configuration.",
+      "evidence": "The equality check is visible, but the setter's side effects and framing contract are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "APIC frequency handling is consistent when the snapshot has no saved APIC frequency.",
+      "evidence": "When saved_apic_frequency is None, the pre-restore checks do not require an APIC frequency, but the x86_64 advancement path queries and requires the destination APIC frequency after restore and state-unit advancement. A missing destination APIC frequency could therefore cause a late failure after partial mutation.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Architecture-specific handling of the restore-time frequency tuple is coherent.",
+      "evidence": "TSC and APIC compatibility checks are outside the x86_64 conditional, while advance_tsc is x86_64-only; architecture-specific interface contracts are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Failure is atomic and preserves the complete pre-call state.",
+      "evidence": "Several fallible mutations occur sequentially without visible rollback, including frequency setting, restoration, and separate clock advancements.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Successful return does not itself resume the VM.",
+      "evidence": "The body contains no start or resume operation and finishes by storing a VP stop guard.",
+      "disposition": "supported"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Compositional snapshot projection restore",
+      "claim": "After LoadedVm::restore returns Ok, every snapshot-owned component has the state represented by accepted saved_state, while destination-owned preparation and bindings are framed.",
+      "why_blocking": "This is the central state-equality claim and cannot be inferred merely from passing saved_state to a callee.",
+      "kind": "callee_contract",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "It directly consumes saved_state and must provide the aggregate restore and framing contract."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O2",
+      "title": "Continuous no-execution interval",
+      "claim": "No VP can execute from the first restore-related mutation until the returned restore_start_guard is deliberately released.",
+      "why_blocking": "Stopping VPs only at the end is insufficient if execution is possible during restoration or between awaited operations.",
+      "kind": "proof_lemma_or_executable_concurrency_test",
+      "suggested_callees": [
+        {
+          "symbol": "PartitionUnit::temporarily_stop_vps",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "It must define stop coverage, guard lifetime, nesting, cancellation, and acquisition semantics."
+        },
+        {
+          "symbol": "LoadedVm::restore_snapshot_state caller",
+          "file_hint": "call sites under openvmm/openvmm_core/src/worker",
+          "reason": "The surrounding lifecycle may establish the required stopped entry invariant."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O3",
+      "title": "Stop-guard replacement safety",
+      "claim": "Acquiring a new stop guard and assigning it over any previous restore_start_guard cannot create an interval in which VPs resume.",
+      "why_blocking": "A transient resume violates the pre-execution boundary even if a guard is present at final return.",
+      "kind": "callee_contract_or_executable_attack",
+      "suggested_callees": [
+        {
+          "symbol": "PartitionUnit::temporarily_stop_vps",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "Its guard composition and Drop behavior determine replacement safety."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O4",
+      "title": "Active versus deferred state preservation",
+      "claim": "Restore reconstructs active state as active and pending or deferred state as pending or deferred without premature activation or loss.",
+      "why_blocking": "The intent explicitly distinguishes these classes, but the supplied body contains no visible classification.",
+      "kind": "component_contract_and_executable_test",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "It must aggregate component restore phases without conflating active and deferred state."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O5",
+      "title": "Stable VP identity mapping",
+      "claim": "Saved VP records are applied only to destination VPs with the same stable identity, independent of enumeration order, and unmatched destination VPs retain valid initial or default state.",
+      "why_blocking": "Index-based mapping could silently apply valid-looking state to the wrong VP.",
+      "kind": "proof_lemma_and_permutation_test",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "The aggregate restore path must identify the VP-state restoration implementation."
+        },
+        {
+          "symbol": "PartitionUnit VP restore routine",
+          "file_hint": "partition unit saved-state restore implementation",
+          "reason": "It likely owns concrete identity lookup and unmatched-VP behavior."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O6",
+      "title": "Downtime transformation correctness",
+      "claim": "For every guest-visible clock domain, the successful final value equals restored snapshot time plus exactly downtime, with defined rounding and overflow behavior and without double advancement.",
+      "why_blocking": "Three advancement operations may overlap semantically, and ordering alone does not prove arithmetic correctness or clock ownership.",
+      "kind": "callee_contract_and_cross_domain_executable_test",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::advance_time",
+          "file_hint": "state unit restore implementation",
+          "reason": "It must define affected component clocks and exclude clocks handled elsewhere."
+        },
+        {
+          "symbol": "PartitionUnit::advance_tsc",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "It must define TSC and APIC arithmetic, rounding, overflow, and affected VPs."
+        },
+        {
+          "symbol": "Partition::advance_snapshot_time",
+          "file_hint": "partition backend implementation or trait definition",
+          "reason": "It must define backend clock effects and separation from component and VP clocks."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O7",
+      "title": "Frequency policy and framing",
+      "claim": "Frequency incompatibilities are rejected before snapshot mutation, set_tsc_frequency_hz with an equal value has no disallowed side effects, and the APIC policy for Some and None is explicit.",
+      "why_blocking": "Frequency is both a compatibility input and an advancement parameter; hidden setter effects or late APIC failure could violate preservation and failure expectations.",
+      "kind": "callee_contract_and_failure_injection_test",
+      "suggested_callees": [
+        {
+          "symbol": "Partition::tsc_frequency_hz",
+          "file_hint": "partition backend trait and implementations",
+          "reason": "It defines availability and meaning of destination TSC frequency."
+        },
+        {
+          "symbol": "Partition::set_tsc_frequency_hz",
+          "file_hint": "partition backend trait and implementations",
+          "reason": "It must frame all state except intended frequency configuration."
+        },
+        {
+          "symbol": "Partition::apic_frequency_hz",
+          "file_hint": "partition backend trait and implementations",
+          "reason": "It determines whether None means destination fallback and whether availability can be checked before mutation."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O8",
+      "title": "Failure residual-state contract",
+      "claim": "Every error point has a documented residual-state guarantee, including whether retry, teardown, or inspection is safe.",
+      "why_blocking": "The sequence can fail after state mutations, so callers need a usable failure-state contract rather than only an Err value.",
+      "kind": "callee_contract_or_executable_failure_matrix",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "It may partially restore components before returning an error."
+        },
+        {
+          "symbol": "StateUnits::advance_time",
+          "file_hint": "state unit restore implementation",
+          "reason": "It may partially advance component clocks."
+        },
+        {
+          "symbol": "PartitionUnit::advance_tsc",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "It may partially advance VP clocks."
+        },
+        {
+          "symbol": "Partition::advance_snapshot_time",
+          "file_hint": "partition backend implementation or trait definition",
+          "reason": "It is the final fallible time mutation before the explicit stop."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O9",
+      "title": "Snapshot acceptance boundary",
+      "claim": "There is an explicit point at which saved_state becomes accepted, and all required format, architecture, capacity, component-identity, and external-resource checks occur no later than that point.",
+      "why_blocking": "The requested postcondition concerns an accepted snapshot, but the caller context and acceptance protocol are absent.",
+      "kind": "caller_contract_and_executable_negative_tests",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "It may currently combine validation and mutation and therefore define the practical acceptance boundary."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O10",
+      "title": "Architecture-specific restore-time semantics",
+      "claim": "For every supported guest architecture, restore_time fields have coherent meanings and all required compatibility checks occur before state mutation.",
+      "why_blocking": "VP TSC advancement is x86_64-only while frequency validation is syntactically architecture-independent.",
+      "kind": "configuration_specific_contract_and_test",
+      "suggested_callees": [
+        {
+          "symbol": "PartitionUnit::advance_tsc",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "It defines the x86_64-specific transformation."
+        },
+        {
+          "symbol": "Partition frequency accessors",
+          "file_hint": "partition backend trait and architecture-specific implementations",
+          "reason": "They define whether frequency fields are meaningful and available on each architecture."
+        }
+      ],
+      "status": "open"
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Strong transactional stopped restore",
+      "semantic_difference": "Requires continuous stopping throughout the call and requires every Err to preserve the complete pre-call destination state, including components and clock domains.",
+      "discriminator": "Inject a failure after each mutating step, compare the complete pre-call and post-failure projections, and concurrently assert that no VP instruction retires."
+    },
+    {
+      "name": "Baseline stopped-success restore",
+      "semantic_difference": "Requires exact transformed snapshot projection and a held stop guard only on Ok; Err may leave partial state that must be torn down or treated as unusable.",
+      "discriminator": "Inject failure after state_units.advance_time. Partial mutation is permitted, but no successful result may expose a runnable VP or incorrect transformed projection."
+    },
+    {
+      "name": "Weaker lifecycle-only restore",
+      "semantic_difference": "Requires only successful completion of delegated restore and requested time adjustments plus storage of a stop guard; it does not guarantee observational equality, stable VP identity mapping, or preservation of unmatched VP defaults.",
+      "discriminator": "Restore into a destination whose VP enumeration order differs. This variant may pass when operations report success even if VP states are swapped; the baseline variant cannot."
+    },
+    {
+      "name": "Destination APIC fallback policy",
+      "semantic_difference": "Interprets saved_apic_frequency None as authorization to use the destination APIC frequency for x86_64 downtime adjustment, while requiring that frequency to be available before any restore mutation.",
+      "discriminator": "Use a snapshot with no saved APIC frequency against backends that expose, omit, or vary destination APIC frequency and verify whether rejection occurs before self.restore."
+    },
+    {
+      "name": "No APIC adjustment legacy policy",
+      "semantic_difference": "Interprets saved_apic_frequency None as requiring no APIC adjustment from snapshot state rather than substitution of the destination frequency.",
+      "discriminator": "Restore a legacy snapshot with None and nonzero downtime, then inspect guest APIC timer progression relative to TSC progression."
+    }
+  ],
+  "uncertainties": [
+    "No caller context is supplied, so the entry-state stopped invariant and lifecycle meaning of restore_start_guard are unknown.",
+    "The accepted-snapshot validation boundary is not shown.",
+    "The semantics, failure atomicity, and framing behavior of LoadedVm::restore are unknown.",
+    "It is unknown whether saved_state includes memory contents, only device and processor state, or another subset.",
+    "Stable VP identity representation and mapping behavior are not visible.",
+    "The distinction between active and pending or deferred components is not visible in this body.",
+    "The clock domains affected by state_units.advance_time, advance_tsc, and advance_snapshot_time may overlap.",
+    "Rounding, saturation, overflow, and maximum supported downtime are unspecified.",
+    "The meaning of saved_apic_frequency None is ambiguous.",
+    "The side effects of setting an already-equal TSC frequency are unknown.",
+    "temporarily_stop_vps has no visible Result, so failure behavior, cancellation safety, and guard acquisition guarantees are unknown.",
+    "The behavior when the future is cancelled during restore or time advancement is unspecified.",
+    "It is unknown whether partition frequency interfaces are meaningful on non-x86_64 guests.",
+    "Profiling operations are assumed not to mutate guest-relevant state.",
+    "The enclosing lifecycle may mark a partially restored VM unusable after failure, but that behavior is not shown."
+  ],
+  "recommended_next_step": "Expand O2 first by establishing the caller entry invariant and temporarily_stop_vps guard semantics. Then expand O1, O5, and O6 into compositional restore, VP-identity, and clock-domain contracts, and run the O7 and O8 failure-injection matrix before selecting the baseline or stronger transactional specification."
+}
+
+SELECTED PARENT OBLIGATION:
+{
+  "id": "O1",
+  "title": "Compositional snapshot projection restore",
+  "claim": "After LoadedVm::restore returns Ok, every snapshot-owned component has the state represented by accepted saved_state, while destination-owned preparation and bindings are framed.",
+  "why_blocking": "This is the central state-equality claim and cannot be inferred merely from passing saved_state to a callee.",
+  "kind": "callee_contract",
+  "suggested_callees": [
+    {
+      "symbol": "LoadedVm::restore",
+      "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+      "reason": "It directly consumes saved_state and must provide the aggregate restore and framing contract."
+    }
+  ],
+  "status": "open"
+}
+
+CHILD FUNCTION:
+restore
+
+CHILD ANALYSIS:
+{
+  "contract": {
+    "pre_condition": "self is a valid LoadedVm and state is a SavedState whose unit payload can be offered to self.state_units.restore. If state.inventory is nonempty, the wrapper additionally requires self.state_units.validate_inventory(&state.inventory) to succeed before restoration begins. An empty inventory follows a legacy or implicit compatibility path: this wrapper performs no explicit compatibility validation, so acceptance depends on the contract of StateUnits::restore or an external compatibility invariant.",
+    "post_condition": "An Ok return establishes compositionally that, when state.inventory was nonempty, validation completed successfully before restoration was invoked, and that self.state_units.restore(state.units).await returned Ok. Any stronger conclusion about the accepted identity-indexed unit projection—including which units are covered, whether their state is active immediately or deferred, and which destination-owned state remains unchanged—is conditional on the contracts of StateUnits::validate_inventory and StateUnits::restore. No equality of the whole LoadedVm is established by this wrapper.",
+    "failure_condition": "The function returns Err if validation of a nonempty inventory fails or StateUnits::restore returns Err. A validation failure occurs before restore is invoked and therefore before restoration mutation by this wrapper's call sequence, subject to validate_inventory itself being observationally read-only. For an empty inventory there is no validation failure path in this body. No rollback, failure atomicity, or reusable-state guarantee after a restore error is established here."
+  },
+  "abstraction": {
+    "name": "Accepted identity-indexed partial state-unit projection",
+    "abstract_state": "A partial mapping from state-unit identities to saved logical unit state, paired with compatibility metadata that may establish whether that mapping is accepted by the destination. The projection covers only state managed through StateUnits; the remaining LoadedVm state is outside this abstraction.",
+    "projection": "project_units(state.units) yields a partial identity-indexed mapping for the units represented by the payload. For nonempty state.inventory, acceptance is established by successful validate_inventory before restore is invoked. For empty inventory, acceptance follows an unresolved legacy or implicit path. Successful restoration means only what the StateUnits::restore contract guarantees for the accepted mapping; this wrapper does not itself establish completeness, reject extra or missing identities, or determine whether restored values become active immediately or remain deferred.",
+    "preserved_state": "LoadedVm state outside the identity-indexed StateUnits projection, including destination-owned preparation, resources, identities, and host bindings, is preserved only if validate_inventory and restore provide an appropriate mutation frame. The wrapper contains no direct mutation of that state but does not independently constrain callee effects.",
+    "hidden_representation": "StateUnits internals; identity lookup and matching; unit enumeration and ordering; serialization formats; compatibility-version rules; restoration staging; active and deferred state transitions; caches; resource handles; preparation state; and destination-specific bindings.",
+    "observation_boundary": "The point at which the restore future resolves and the caller regains access to &mut LoadedVm. Observations concern the accepted identity-indexed StateUnits projection and any callee-guaranteed frame over surrounding LoadedVm state. Transient states during await and observationally irrelevant representation differences are excluded; whole-LoadedVm equality is not part of the abstraction."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "A nonempty inventory is validated before StateUnits restoration is invoked.",
+      "evidence": "The conditional call to validate_inventory(&state.inventory) uses error propagation and precedes self.state_units.restore(state.units).await.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "An empty inventory follows a path without explicit compatibility validation in this wrapper.",
+      "evidence": "validate_inventory is called only when !state.inventory.is_empty().",
+      "disposition": "supported"
+    },
+    {
+      "claim": "A validation error prevents restore from being invoked.",
+      "evidence": "The ? operator returns from the function on validation failure before control reaches the restore call.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "An Ok result composes any required nonempty-inventory validation success with StateUnits::restore success.",
+      "evidence": "Both fallible calls use error propagation and the final Ok(()) is reached only after the applicable validation and the awaited restore call return Ok.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Successful restoration covers every relevant state-unit identity exactly once.",
+      "evidence": "The wrapper delegates the unit payload wholesale and performs no identity traversal, missing-unit check, duplicate check, or completeness comparison.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Restored unit state is active and caller-observable when the future resolves.",
+      "evidence": "The wrapper awaits restore, but the callee contract is unavailable and may distinguish installed, deferred, staged, or active state.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Destination-owned resources and bindings remain unchanged.",
+      "evidence": "The wrapper directly mutates no such fields, but both StateUnits methods may have effects not visible in this body.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "An empty inventory is compatible with every destination.",
+      "evidence": "The branch skips explicit validation, but neither the meaning of empty metadata nor compatibility checks inside restore are supplied.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "A restore error leaves the pre-call observable state unchanged.",
+      "evidence": "The wrapper performs no rollback and the transactional behavior of StateUnits::restore is unknown.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Success makes the entire LoadedVm equal to the saved state.",
+      "evidence": "Only state.units is passed to restore, while inventory is used conditionally as compatibility metadata and other LoadedVm state is neither represented nor compared.",
+      "disposition": "challenged"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Identity-indexed unit restoration semantics",
+      "claim": "StateUnits::restore returning Ok must specify the postcondition for each accepted state-unit identity in project_units(units), including whether the saved value is active at return or installed for deferred activation, and how missing, duplicate, unknown, or extra identities are handled.",
+      "why_blocking": "The wrapper establishes only callee success. Reintegrating its result into restore_snapshot_state requires a precise account of which identity-indexed unit states have been restored and when they become observable, without asserting whole-LoadedVm equality.",
+      "kind": "callee_contract",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::restore",
+          "file_hint": "implementation of the StateUnits type used by LoadedVm",
+          "reason": "It consumes the unit payload and determines identity matching, coverage, and active-versus-deferred restoration semantics."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O2",
+      "title": "Compatibility metadata acceptance",
+      "claim": "For nonempty inventory, StateUnits::validate_inventory returning Ok must define the compatibility property established before restoration mutation. For empty inventory, either a documented legacy invariant must make explicit validation unnecessary or StateUnits::restore must enforce the compatibility conditions needed for safe acceptance.",
+      "why_blocking": "The wrapper has two distinct acceptance paths, and the empty-inventory path cannot be treated as universally compatible without additional evidence.",
+      "kind": "callee_contract_or_executable_attack",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::validate_inventory",
+          "file_hint": "implementation of the StateUnits type used by LoadedVm",
+          "reason": "Its contract must define what successful validation proves about compatibility metadata and destination unit identities."
+        },
+        {
+          "symbol": "StateUnits::restore",
+          "file_hint": "implementation of the StateUnits type used by LoadedVm",
+          "reason": "Its behavior must show whether compatibility omitted by an empty inventory is checked implicitly or justified by a legacy invariant."
+        },
+        {
+          "symbol": "restore_snapshot_state",
+          "file_hint": "caller or integration path that invokes LoadedVm::restore",
+          "reason": "The caller may establish the legacy precondition or version invariant under which an empty inventory is accepted."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O3",
+      "title": "Conditional destination-owned frame",
+      "claim": "StateUnits::validate_inventory and StateUnits::restore must specify whether they modify only compatibility bookkeeping and identity-indexed state-unit state, and must enumerate any permitted effects on destination-owned preparation, resources, identities, or bindings.",
+      "why_blocking": "LoadedVm::restore contains no direct mutation outside StateUnits, but that syntactic fact cannot establish preservation across callee effects.",
+      "kind": "callee_frame_contract",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::validate_inventory",
+          "file_hint": "implementation of the StateUnits type used by LoadedVm",
+          "reason": "Validation must be observationally read-only or expose any compatibility bookkeeping it changes."
+        },
+        {
+          "symbol": "StateUnits::restore",
+          "file_hint": "implementation of the StateUnits type used by LoadedVm",
+          "reason": "Its mutation frame must distinguish restored unit state from destination-owned resources and bindings."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O4",
+      "title": "Projection boundary for snapshot integration",
+      "claim": "The save path and restore_snapshot_state must identify the StateUnits-managed identities represented by SavedState.units and treat all other snapshot fields and destination-owned state through separate abstractions, so LoadedVm::restore can be composed as a partial projection restore rather than whole-object equality.",
+      "why_blocking": "A precise StateUnits contract is insufficient for caller-level reasoning unless restore_snapshot_state knows which portion of the snapshot and destination state this wrapper governs.",
+      "kind": "proof_lemma",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm snapshot/save path",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "The producer of SavedState can define the identity-indexed projection encoded by SavedState.units."
+        },
+        {
+          "symbol": "restore_snapshot_state",
+          "file_hint": "snapshot restoration orchestration path",
+          "reason": "The integration contract must compose this partial projection with restoration of other snapshot-owned state."
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "O5",
+      "title": "Failure-state atomicity boundary",
+      "claim": "StateUnits::restore must specify whether an Err preserves the pre-call observable unit projection, leaves partially installed or active unit state, or transitions the destination into a state requiring recovery. StateUnits::validate_inventory must likewise state whether validation failure is observationally non-mutating.",
+      "why_blocking": "The wrapper's sequencing prevents restore from running after validation failure but does not establish callee purity, rollback, or safe reuse after a restoration failure.",
+      "kind": "callee_contract_or_executable_attack",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::validate_inventory",
+          "file_hint": "implementation of the StateUnits type used by LoadedVm",
+          "reason": "Its failure frame determines whether pre-mutation validation is also observationally non-mutating."
+        },
+        {
+          "symbol": "StateUnits::restore",
+          "file_hint": "implementation of the StateUnits type used by LoadedVm",
+          "reason": "Only the callee can define transactional behavior or characterize partial failure."
+        },
+        {
+          "symbol": "restore_snapshot_state",
+          "file_hint": "snapshot restoration orchestration path",
+          "reason": "The caller must enforce recovery or disposal if StateUnits permits partial failure."
+        }
+      ],
+      "status": "open"
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Validated active partial projection",
+      "semantic_difference": "For an accepted inventory path, Ok means every identity covered by project_units(units) has its saved logical state active at return, while state outside the projection is framed according to explicit StateUnits contracts. Empty inventory is accepted only under a documented legacy invariant or equivalent implicit validation.",
+      "discriminator": "After Ok, observe each represented unit immediately and verify identity coverage and saved values; separately test an empty-inventory snapshot that violates destination compatibility."
+    },
+    {
+      "name": "Validated deferred partial projection",
+      "semantic_difference": "Ok means the accepted identity-indexed state has been installed or queued successfully, but some unit values become active only at a later lifecycle boundary. The wrapper itself does not distinguish installation from activation.",
+      "discriminator": "After Ok but before the documented activation event, compare represented units with their saved values, then repeat after activation; deferred observations may differ only before that event."
+    },
+    {
+      "name": "Weak delegated partial restore",
+      "semantic_difference": "Ok means only that applicable nonempty-inventory validation and StateUnits::restore returned Ok. Identity completeness, activation timing, frame preservation, and failure atomicity are not promised at this layer.",
+      "discriminator": "A StateUnits implementation that accepts the payload and returns Ok without making all represented unit values immediately observable satisfies this wrapper-level variant but violates stronger active semantics."
+    },
+    {
+      "name": "Atomic accepted partial projection",
+      "semantic_difference": "In addition to defined active or deferred success semantics, every validation or restoration Err preserves the pre-call observable projection and destination-owned frame.",
+      "discriminator": "Inject failures after restoration has begun and compare all caller-observable unit and destination-owned state with the pre-call state."
+    }
+  ],
+  "uncertainties": [
+    "The concrete StateUnits type and contracts of validate_inventory and restore are not supplied.",
+    "The identity domain and mapping encoded by SavedState.units are not defined.",
+    "The semantic meaning and historical versioning rules of an empty inventory are unknown.",
+    "It is unknown whether validate_inventory is observationally pure on success or failure.",
+    "It is unknown whether restore independently checks compatibility when inventory is empty.",
+    "It is unknown how restore handles missing, duplicate, unknown, or extra state-unit identities.",
+    "It is unknown whether a successful restore makes unit state active immediately or installs deferred state for a later lifecycle transition.",
+    "The mutation frame of both StateUnits methods is unknown, including effects on destination-owned resources and bindings.",
+    "The transactional and recovery behavior after restoration failure is unknown.",
+    "The surrounding restore_snapshot_state contract and its composition with non-StateUnits snapshot fields are not supplied."
+  ],
+  "recommended_next_step": "Obtain the StateUnits::restore contract first and express it as an identity-indexed partial-projection postcondition with explicit coverage and active-versus-deferred semantics. Then pair it with validate_inventory's nonempty-inventory acceptance guarantee and the documented empty-inventory legacy path, and compose those results in restore_snapshot_state without asserting equality of the whole LoadedVm.",
+  "refinement_changes": [
+    "Replaced the whole-LoadedVm-oriented snapshot projection with an accepted partial projection indexed by state-unit identity.",
+    "Separated compatibility metadata from restored unit state: inventory constrains acceptance, while units supplies the restoration projection.",
+    "Made the ordering guarantee explicit: nonempty inventory validation completes successfully before StateUnits::restore is invoked.",
+    "Characterized empty inventory as a legacy or implicit compatibility path whose safety remains an obligation rather than treating it as either valid or invalid.",
+    "Narrowed the success contract to composition of applicable validation success and StateUnits::restore success.",
+    "Removed any implication that wrapper success alone establishes component completeness, exact identity coverage, immediate activation, or whole-LoadedVm equality.",
+    "Added active-versus-deferred restoration semantics to the StateUnits callee obligation.",
+    "Made preservation of destination-owned resources and bindings conditional on explicit StateUnits mutation-frame contracts.",
+    "Clarified that validation failure precedes restoration mutation by call order but is observationally non-mutating only if validate_inventory's frame establishes that property.",
+    "Kept failure atomicity as a callee and caller-integration obligation rather than strengthening LoadedVm::restore with rollback semantics.",
+    "Refocused projection completeness on the boundary needed to compose LoadedVm::restore into restore_snapshot_state.",
+    "Preserved obligation identifiers O1 through O5 while refining their claims around identity-indexed projection, compatibility acceptance, conditional framing, integration, and failure behavior."
+  ]
+}
+
+Return an object with:
+- disposition: open|conditional|discharged|refuted
+- rationale: why the child evidence has this effect
+- caller_effect: the exact parent claim now supported or challenged
+- remaining_gap: what remains before the parent proof can close
+- proof_map_updates: list of edges/status changes
+- parent_contract_revision: null or a complete revised parent contract.

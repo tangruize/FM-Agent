@@ -4,9 +4,9 @@ FM-Agent 的配置项都在 [`fm-agent.toml`](../fm-agent.toml) 里（每一项�
 
 | 参数 | 默认值 | 描述 |
 |---|---|---|
-| `LLM_MODEL` | `anthropic/claude-sonnet-4.6` | 所有任务的默认模型；本地 CLI 后端下非空时也会传给对应 CLI |
+| `LLM_MODEL` | `gpt-5.6-sol` | 所有任务的默认模型；本地 CLI 后端下非空时也会传给对应 CLI |
 | `LLM_EFFORT` | unset | 可选；非空时传给 `codex exec` 或 `claude -p`，留空则不传 effort 参数 |
-| `FM_AGENT_MODEL_BACKEND` | `opencode` | 模型后端；设为 `auto`、`codex-cli` 或 `claude-cli` 可绕过 OpenCode 使用本地 CLI |
+| `FM_AGENT_MODEL_BACKEND` | `copilot-cli` | 模型后端；设为 `copilot-cli`、`auto`、`codex-cli` 或 `claude-cli` 可绕过 OpenCode 使用本地 CLI |
 | `OPENCODE_SETUP_MODEL` | `LLM_MODEL` | 用于理解代码库、划分代码模块和生成领域知识的模型 |
 | `OPENCODE_SPEC_MODEL` | `LLM_MODEL` | 用于规约生成的模型 |
 | `OPENCODE_BUG_VALIDATION_MODEL` | `LLM_MODEL` | 用于进行 Bug 分析和生成报告的模型 |

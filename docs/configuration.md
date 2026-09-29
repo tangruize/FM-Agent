@@ -9,7 +9,7 @@ OpenCode setup.
 
 | Parameter                       | Default                        | Description                                                  |
 | ------------------------------- | ------------------------------ | ------------------------------------------------------------ |
-| `LLM_MODEL`                     | `anthropic/claude-sonnet-4.6`  | Default model used as the fallback for all task-specific model settings |
+| `LLM_MODEL`                     | `gpt-5.6-sol`                  | Default model used as the fallback for all task-specific model settings |
 | `OPENCODE_SETUP_MODEL`          | `LLM_MODEL`                    | Model used by OpenCode for codebase understanding, phase planning, and domain context generation |
 | `OPENCODE_SPEC_MODEL`           | `LLM_MODEL`                    | Model used by OpenCode for batch behavioral spec generation  |
 | `OPENCODE_BUG_VALIDATION_MODEL` | `LLM_MODEL`                    | Model used by OpenCode to validate `MISMATCH` results with probe scripts and bug reports |
@@ -19,7 +19,7 @@ OpenCode setup.
 | `LLM_API_KEY`                   | (env)                          | LLM API key for FM-Agent's direct calls |
 | `LLM_API_BASE_URL`              | `https://openrouter.ai/api/v1` | LLM API base URL for FM-Agent's direct calls |
 | `LLM_EFFORT`                    | unset                          | Optional reasoning effort passed to `codex exec` or `claude -p`; leave empty to omit the effort flag |
-| `FM_AGENT_MODEL_BACKEND`        | `opencode`                     | Model backend. Use `auto`, `codex-cli`, or `claude-cli` to bypass OpenCode and use local CLI authentication |
+| `FM_AGENT_MODEL_BACKEND`        | `copilot-cli`                  | Model backend. Use `copilot-cli`, `auto`, `codex-cli`, or `claude-cli` to bypass OpenCode and use local CLI authentication |
 | `FM_AGENT_DOMAIN_KNOWLEDGE`     | unset                          | Optional `os.pathsep`-separated Markdown files with user-provided domain knowledge |
 | `GRANULARITY`                   | `40`                           | Minimum number of lines per code block when splitting a function for block-by-block reasoning |
 | `MAX_WORKERS`                   | `10`                           | Maximum number of concurrent worker threads for reasoning and bug validation |

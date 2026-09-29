@@ -99,8 +99,8 @@ class _Section(BaseModel):
 class LLMCfg(_Section):
     api_key: str = ""  # secret — from .env / env only, never committed to the toml
     base_url: str = "https://openrouter.ai/api/v1"
-    backend: str = "opencode"
-    name: str = "anthropic/claude-sonnet-4.6"
+    backend: str = "copilot-cli"
+    name: str = "gpt-5.6-sol"
     effort: str = ""
     provider: str = "openrouter"
     # Endpoint API style, used to pick the OpenCode SDK adapter when FM-Agent

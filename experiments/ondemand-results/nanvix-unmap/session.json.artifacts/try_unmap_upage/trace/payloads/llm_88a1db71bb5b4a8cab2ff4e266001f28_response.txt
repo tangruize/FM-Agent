@@ -1,0 +1,162 @@
+{
+  "contract": {
+    "pre_condition": "vaddr denotes a valid page-aligned user virtual page in the address space represented by vmem; self and vmem satisfy the ownership and representation invariants required by Vmem::unmap; the selected page is eligible for ordinary user-page unmapping rather than protected, kernel, or shared-mapping-specific handling.",
+    "post_condition": "If the result is Ok(true), the pre-state abstract user mapping contained vaddr -> f for some user frame f, the post-state mapping is exactly the pre-state mapping with vaddr removed, all unrelated and preserved state is unchanged, and the UserFrame returned by Vmem::unmap has been dropped before this function returns. If the result is Ok(false), the pre-state had no abstract mapping for vaddr and the mapping relation and preserved state are unchanged. These state-transition claims require matching guarantees from Vmem::unmap and UserFrame destruction. This body alone establishes that Ok(Some(frame)) becomes Ok(true), Ok(None) becomes Ok(false), Err(e) is propagated, and any returned frame is consumed locally.",
+    "failure_condition": "If Vmem::unmap returns Err(e), this function returns Err(e) without fabricating success and performs no later explicit mutation. Whether the mapping relation, page-table representation, cleanup state, or allocator authority may already have changed depends entirely on Vmem::unmap's failure contract. Without callee failure atomicity, partial concrete mutation must be admitted and characterized while preserving memory safety, representation invariants, and exact ownership accounting."
+  },
+  "abstraction": {
+    "name": "SelectedUserPageUnmap",
+    "abstract_state": "The state is a tuple (M, R, A, C, P): M is the partial abstract mapping from eligible user virtual pages to backing user-frame identities; R is the page-directory and lower-level page-table representation; A records backing-frame ownership and allocator authority, including authority temporarily embodied by a returned UserFrame; C records lower-level page-table occupancy, cleanup eligibility, ownership, and reclamation status; P contains unrelated mappings, active address-space identity, protected/kernel/shared mappings, allocator identity, and other state required to remain stable.",
+    "projection": "project(R) = M for eligible user mappings. A present valid user leaf entry at vaddr projects to M[vaddr] = frame_id; absence projects to vaddr not in dom(M). Changes to C, including empty-table reclamation, are representation-only and must not add, remove, or retarget abstract mappings other than the selected vaddr transition.",
+    "preserved_state": "For every virtual page u distinct from vaddr, M_post[u] = M_pre[u]. Active address-space identity, protected/kernel/shared mappings, allocator identity, and unrelated ownership authority remain observationally equal. Cleanup may change only representation and reclamation state associated with the selected page-table path and only when its cleanup preconditions hold.",
+    "hidden_representation": "Page-table entry encodings, page-directory indices, lower-level table frames, occupancy counters or scans, TLB-maintenance details, temporary UserFrame values, allocator bookkeeping, and the sequence of concrete writes performed by Vmem::unmap are hidden except where they affect the stated observations.",
+    "observation_boundary": "The boundary spans function entry through production of the returned Result, including destruction of any temporary UserFrame returned by Vmem::unmap. Observable components are the Result discriminant and boolean, M, active address-space identity, protected/kernel/shared mappings, allocator identity, externally meaningful frame ownership, and representation invariants. Intermediate callee states are outside the boundary unless an Err exposes partial mutation or reentrant or external observation is possible."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "The body converts the callee's option-valued success into a boolean and propagates errors.",
+      "evidence": "vmem.unmap(vaddr)?.is_some() evaluates to true for Ok(Some(_)), false for Ok(None), and returns Err(e) when Vmem::unmap returns Err(e).",
+      "disposition": "supported"
+    },
+    {
+      "claim": "A UserFrame returned in Ok(Some(frame)) is consumed locally and dropped before try_unmap_upage returns.",
+      "evidence": "is_some consumes the Option<UserFrame>; the contained value is neither returned nor stored by this body.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Dropping the returned UserFrame releases authority for the removed backing frame exactly once through the correct allocator.",
+      "evidence": "The source comment states that dropping UserFrame frees the physical frame, but no destructor or ownership contract is supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Ok(true) means exactly the selected abstract mapping was removed.",
+      "evidence": "The body tests only whether Vmem::unmap returned Some and independently verifies neither the removed address nor preservation of other mappings.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Ok(false) preserves the complete abstract mapping relation.",
+      "evidence": "The body performs no mutation after Vmem::unmap returns None, but the callee could have mutated state before returning None.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Empty lower-level page tables are reclaimed only when safe and without changing the abstract mapping result.",
+      "evidence": "No cleanup logic or cleanup contract is supplied; any reclamation behavior is encapsulated by Vmem::unmap.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Errors are state-atomic.",
+      "evidence": "The question-mark operator propagates errors but does not roll back mutations already performed inside Vmem::unmap.",
+      "disposition": "challenged"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Selected mapping correspondence",
+      "claim": "Vmem::unmap(vaddr) returns Ok(Some(frame)) if and only if the pre-state contains M[vaddr] = frame.id, and then the post-state is exactly M with vaddr removed. It returns Ok(None) if and only if vaddr was absent, and then leaves M unchanged.",
+      "why_blocking": "This is the minimum callee contract needed to interpret the boolean as mapped versus unmapped rather than merely Some versus None.",
+      "kind": "callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::unmap",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "Its option result and state transition determine the caller's abstract success semantics."
+        }
+      ]
+    },
+    {
+      "id": "O2",
+      "title": "Mapping and state noninterference",
+      "claim": "On every successful return, Vmem::unmap preserves all mappings other than vaddr, active address-space identity, protected/kernel/shared mappings, allocator identity, and unrelated ownership authority.",
+      "why_blocking": "The caller has no mechanism to detect or repair collateral mutations.",
+      "kind": "frame-condition proof lemma",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::unmap",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "A callee frame condition can discharge the caller-visible preservation requirements."
+        }
+      ]
+    },
+    {
+      "id": "O3",
+      "title": "Exact backing-frame authority transfer",
+      "claim": "When Vmem::unmap returns Ok(Some(frame)), it transfers exactly one valid ownership authority for the removed backing frame into frame, retains no duplicate release authority, and UserFrame destruction releases or transfers that authority exactly once through the same allocator identity. Ok(None) and Err do not create or release fictitious authority.",
+      "why_blocking": "The caller intentionally discards the returned frame, so safety depends on compatible exact-once semantics for unmap and destruction.",
+      "kind": "ownership contract",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::unmap",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "It must establish provenance and uniqueness of the returned UserFrame authority."
+        },
+        {
+          "symbol": "UserFrame::drop",
+          "file_hint": "src/kernel/src/mm",
+          "reason": "It must establish the allocator effect of implicit destruction and rule out leaks or double release."
+        }
+      ]
+    },
+    {
+      "id": "O4",
+      "title": "Safe lower-level table reclamation",
+      "claim": "A lower-level page table is reclaimed only if it is empty over the full relevant entry domain, owned and reclaimable by this address space, not protected or shared, and not required by a live reference or traversal. Reclamation preserves project(R) and allocator identity.",
+      "why_blocking": "Unsafe cleanup can remove unrelated mappings or release a page-table frame still in use even when the selected leaf result appears correct.",
+      "kind": "representation invariant and proof lemma",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::unmap",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "The unmap path decides whether cleanup is attempted and must connect cleanup to the abstract projection."
+        },
+        {
+          "symbol": "lower-level page-table cleanup helper",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "If cleanup is delegated, its emptiness, ownership, and reclamation preconditions must be stated directly."
+        }
+      ]
+    },
+    {
+      "id": "O5",
+      "title": "Error mutation boundary",
+      "claim": "Prove one explicit failure model: either Vmem::unmap is abstractly and concretely failure-atomic, or each Err variant documents permitted partial mutation while guaranteeing no fabricated frame release, preservation of representation and ownership invariants, and a well-defined projected mapping state.",
+      "why_blocking": "The caller supplies no rollback, so its failure contract cannot be stronger than the callee's.",
+      "kind": "callee contract or executable fault-injection attack",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::unmap",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "Mutation order and error sites determine whether failure is transactional or may expose partial mutation."
+        }
+      ]
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Strong transactional unmap",
+      "semantic_difference": "Every Err preserves M, R, A, C, and P exactly apart from unobservable temporaries; removal, cleanup, and authority release commit atomically.",
+      "discriminator": "Inject failure after clearing the selected leaf but before cleanup completes. This variant requires the leaf and ownership state to be restored before Err; an Err with the mapping absent falsifies it."
+    },
+    {
+      "name": "Recommended characterized-failure unmap",
+      "semantic_difference": "Successful returns have exact abstract behavior and preservation guarantees, while Err may expose documented partial concrete or abstract mutation provided representation invariants, ownership accounting, and the final projected mapping state are explicit.",
+      "discriminator": "Force cleanup reclamation to fail after leaf removal. Err with the selected mapping absent is allowed only if the committed removal and frame-authority disposition are specified; an unspecified state falsifies this variant."
+    },
+    {
+      "name": "Weak result-forwarding wrapper",
+      "semantic_difference": "Only Ok(Some(_)) to Ok(true), Ok(None) to Ok(false), Err propagation, and local consumption of Some are guaranteed; mapping correspondence and state preservation are omitted.",
+      "discriminator": "A mock unmap that deletes an unrelated mapping and returns Ok(None) satisfies this variant but violates O1 and O2."
+    }
+  ],
+  "uncertainties": [
+    "The supplied context does not define valid user-page addresses or whether PageAligned<VirtualAddress> enforces the user range.",
+    "The relationship between VirtMemoryManager self and vmem is not shown; self is syntactically unused, but an unstated consistency or active-address-space invariant may be required.",
+    "The exact return type and ownership semantics of Vmem::unmap are inferred from is_some and the comment rather than a supplied signature or contract.",
+    "The UserFrame destructor's allocator, fallibility model, and exact release behavior are not supplied.",
+    "It is unknown whether protected, kernel, or shared mappings are rejected by Vmem::unmap or excluded by construction.",
+    "It is unknown whether lower-level cleanup occurs in Vmem::unmap, whether tables may be shared, and how emptiness is determined.",
+    "TLB invalidation and hardware visibility are not shown; if caller-observable, they must be added to the representation and callee contract.",
+    "No callee error variants or mutation order are supplied, so failure atomicity and partial-mutation behavior cannot be determined."
+  ],
+  "recommended_next_step": "Expand O1 and O5 against the signature, implementation, and error paths of Vmem::unmap first, then expand O3 against UserFrame ownership and destruction before accepting the exact-once release intent."
+}

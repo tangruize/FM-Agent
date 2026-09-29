@@ -1,0 +1,170 @@
+{
+  "contract": {
+    "pre_condition": "vaddr is page-aligned by type and lies in user space. To establish the selected-mapping correspondence, additionally assume a well-formed representation: try_find_user_frame is pure and exactly reflects M; any reported frame agrees with the corresponding software page-table entry; required page-directory and page-table structures exist; all unmap operations succeed; an emptied page table has exactly one matching user_page_tables entry; and hardware mirroring and table cleanup preserve mappings other than vaddr.",
+    "post_condition": "On Ok(None), the body establishes only that try_find_user_frame(vaddr) returned None and that no subsequent explicit mutation occurred. M is unchanged and vaddr was absent only under the try_find_user_frame purity and correspondence contract. On Ok(Some(frame)), the body establishes that try_find_user_frame returned frame_address before mutation, the selected software page-table entry compared equal to frame_address, page_table.unmap succeeded, hw_unmap_user was invoked for vaddr, and any empty page table was removed from user_page_tables and successfully unmapped from pgdir. Under the projection and locality obligations, frame.id equals the pre-state M[vaddr] and the post-state is exactly M with vaddr removed.",
+    "failure_condition": "Err(BadAddress) occurs before lookup or explicit mutation when vaddr is outside user space. Other Err results may arise from address construction, try_find_user_frame, page-directory checks, page-table lookup, page-table unmap, lookup_user_page_table, or pgdir.unmap. Errors before page_table.unmap preserve state only if the invoked callees are pure or failure-atomic. Errors from or after page_table.unmap are not shown to be atomic: pgdir.unmap may fail after the selected software and hardware mappings were removed and after user_page_tables was modified. A frame mismatch invokes unreachable!, and a missing empty-table list entry invokes expect, so malformed reachable states may panic instead of returning Result."
+  },
+  "abstraction": {
+    "name": "Selected user virtual-page mapping",
+    "abstract_state": "M is a finite partial map from page-aligned user virtual addresses to user-frame identities.",
+    "projection": "For each user virtual address va, M[va] = UserFrame::new(frame_address).id exactly when the authoritative Vmem representation consistently associates va with frame_address. At minimum this requires agreement between the metadata queried by try_find_user_frame and the corresponding present software page-table entry. If effective hardware translation is caller-observable mapping state, the hardware entry must also agree.",
+    "preserved_state": "All mappings at addresses other than vaddr, frame contents and ownership, nonempty page tables, unrelated page-directory entries, and unrelated hardware mappings. Removing a page table after its final entry is removed is hidden representation cleanup and must not alter M at any other address.",
+    "hidden_representation": "pgdir entries, user_page_tables storage and ordering, PageTable entries and nmapped counters, metadata used by try_find_user_frame, architecture-specific hardware page tables, and allocation or storage objects backing page tables.",
+    "observation_boundary": "The boundary is return from Vmem::unmap. The caller observes Result<Option<UserFrame>, Error> and subsequent behavior obtainable through Vmem mapping queries or address translation. Panic through unreachable! or expect is also observable. Intermediate mutations are hidden only if concurrent or reentrant observation is impossible."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "Ok(None) corresponds exactly to vaddr being absent from M and preserves M.",
+      "evidence": "The only Ok(None) branch follows try_find_user_frame(vaddr) returning None and occurs before any later explicit mutation. The body does not establish that this callee is pure or that None is equivalent to abstract absence.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Ok(Some(frame)) returns the frame selected from the pre-state.",
+      "evidence": "frame_address is obtained before explicit mutation, the software page-table lookup is compared with it, and success constructs UserFrame::new(frame_address). This establishes abstract identity only if try_find_user_frame and UserFrame::new correspond to M.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "A normal Ok(Some(frame)) result occurs only after the selected software entry was successfully unmapped and hardware unmapping was invoked.",
+      "evidence": "page_table.unmap(page_address)? must return successfully before execution reaches hw_unmap_user, and all later fallible cleanup must also succeed before Ok(Some(...)) is returned.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "On Ok(Some(frame)), the post-state is exactly M with vaddr removed.",
+      "evidence": "The body targets the selected page and conditionally removes its empty table, but contracts are absent for the locality of page_table.unmap, hw_unmap_user, and pgdir.unmap, and for consistency with metadata queried by try_find_user_frame.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "The unconditional if-and-only-if parent contract holds for every valid user address.",
+      "evidence": "Even when try_find_user_frame reports a frame, later operations can syntactically return Err, and representation mismatches can panic. Thus pre-state membership alone does not imply Ok(Some(frame)) without additional readiness or infallibility assumptions.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Every Err leaves M unchanged.",
+      "evidence": "page_table.unmap and hw_unmap_user occur before the fallible pgdir.unmap call, and user_page_tables.remove occurs before pgdir.unmap. The source comment acknowledges that recovery after this point would require remapping.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "A reachable pgdir.unmap failure causes a partially updated representation.",
+      "evidence": "The operation order permits this outcome, but the supplied source does not establish that pgdir.unmap can fail after the preceding readiness checks in a well-formed reachable state.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Removing the page table from user_page_tables before pgdir.unmap is a confirmed implementation bug.",
+      "evidence": "The ordering can produce inconsistency if pgdir.unmap fails, but neither reachable failure nor a required failure-atomic contract is established by the supplied context.",
+      "disposition": "unknown"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Metadata-to-mapping correspondence",
+      "claim": "In every well-formed pre-state, try_find_user_frame(vaddr) returns None if and only if vaddr is absent from M, and returns Some(a) if and only if M[vaddr] = UserFrame::new(a).id; the call does not mutate caller-observable state.",
+      "why_blocking": "This connects the sole Ok(None) branch and the returned frame address to abstract mapping presence and identity.",
+      "kind": "callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::try_find_user_frame",
+          "file_hint": "src/kernel/src/mm/virt/vmem.rs",
+          "reason": "Its option result is the body's source of mapping presence and frame identity."
+        }
+      ]
+    },
+    {
+      "id": "O2",
+      "title": "Page-table unmap locality",
+      "claim": "Given lookup(page_address) = frame_address, successful page_table.unmap(page_address) removes exactly that entry, preserves every other entry, and updates nmapped to the exact number of remaining entries. Its Err behavior is either failure-atomic or explicitly characterized.",
+      "why_blocking": "This is the central state transition needed for M' = M with only vaddr removed and for sound empty-table detection.",
+      "kind": "callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "PageTable::unmap",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "Its transition and failure behavior determine whether only the selected software mapping is removed."
+        },
+        {
+          "symbol": "PageTable::nmapped",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "Its exactness determines whether table cleanup occurs only after the final mapping is removed."
+        }
+      ]
+    },
+    {
+      "id": "O3",
+      "title": "Hardware mirror locality",
+      "claim": "hw_unmap_user(vaddr) removes or invalidates exactly the hardware translation for vaddr, preserves all other mappings, and restores agreement between the hardware and software projections at the observation boundary.",
+      "why_blocking": "If effective hardware translation belongs to M, software unmapping alone does not establish the requested post-state.",
+      "kind": "callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "Vmem::hw_unmap_user",
+          "file_hint": "src/kernel/src/mm/virt/vmem.rs",
+          "reason": "It performs the architecture-specific mirror operation without a visible Result."
+        }
+      ]
+    },
+    {
+      "id": "O4",
+      "title": "Empty-table cleanup preservation",
+      "claim": "When nmapped() equals zero, removing the matching user_page_tables element and successfully unmapping pgtable_vaddr from pgdir changes no abstract user mapping and preserves every unrelated directory entry and table.",
+      "why_blocking": "Success may include table-level cleanup that must be proved to be representation-only rather than an additional abstract mapping change.",
+      "kind": "proof lemma",
+      "suggested_callees": [
+        {
+          "symbol": "PageDirectory::unmap",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "Its locality and readiness requirements govern the final cleanup transition."
+        }
+      ]
+    },
+    {
+      "id": "O5",
+      "title": "Late-failure reachability",
+      "claim": "Either prove that pgdir.unmap cannot fail after the preceding checks in every well-formed reachable state, or construct an execution in which it fails after page_table.unmap, hw_unmap_user, and user_page_tables.remove and characterize the resulting observable state.",
+      "why_blocking": "Until resolved, a present mapping does not necessarily imply Ok(Some(frame)), and failure atomicity cannot be assumed.",
+      "kind": "executable attack or proof lemma",
+      "suggested_callees": [
+        {
+          "symbol": "PageDirectory::unmap",
+          "file_hint": "src/kernel/src/mm/virt",
+          "reason": "Its reachable failure modes determine whether the syntactic partial-update path is feasible."
+        }
+      ]
+    },
+    {
+      "id": "O6",
+      "title": "Representation mismatch exclusion",
+      "claim": "For every reachable well-formed state where try_find_user_frame(vaddr) returns frame_address, the corresponding page table exists, page_table.lookup returns exactly frame_address, and if that table becomes empty, user_page_tables contains exactly one matching pgtable_vaddr.",
+      "why_blocking": "Otherwise the function may terminate through unreachable! or expect rather than satisfying a Result-based caller contract.",
+      "kind": "representation invariant",
+      "suggested_callees": []
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Stronger total atomic contract",
+      "semantic_difference": "For every page-aligned input, Ok(Some(frame)) occurs if and only if M contained vaddr mapped to frame.id, Ok(None) occurs if and only if vaddr was absent, every Err preserves all observable state, and no panic is reachable.",
+      "discriminator": "Force each fallible operation, especially pgdir.unmap after final-page removal, to fail and compare pre-state and post-state mapping queries, hardware translation, user_page_tables membership, and pgdir state."
+    },
+    {
+      "name": "Readiness-conditioned exact contract",
+      "semantic_difference": "The requested exact Ok(Some) and Ok(None) correspondence holds only under explicit representation-consistency and no-failure preconditions. Violations of those preconditions may return Err or panic as separately specified.",
+      "discriminator": "Prove O1 through O4 and O6 under a representation invariant, then prove that all fallible calls on the mapped path succeed under the stated readiness condition."
+    },
+    {
+      "name": "Weaker body-local result contract",
+      "semantic_difference": "Ok(None) means only that try_find_user_frame returned None. Ok(Some(frame)) means only that a reported frame matched the selected software entry, software unmap succeeded, hardware unmap was invoked, and required cleanup succeeded. It asserts neither equivalence with M nor preservation of unrelated mappings.",
+      "discriminator": "A counterexample to the completeness of try_find_user_frame or the locality of page_table.unmap or hw_unmap_user invalidates the stronger variants while remaining consistent with this one."
+    }
+  ],
+  "uncertainties": [
+    "The supplied context does not define whether M is projected from user-frame metadata, software page tables, effective hardware translations, or a consistency relation among them.",
+    "No contract is supplied for try_find_user_frame, including purity, completeness, or its authoritative metadata source.",
+    "No contract is supplied for PageTable::lookup, PageTable::unmap, PageTable::nmapped, lookup_user_page_table, hw_unmap_user, or PageDirectory::unmap.",
+    "It is unknown whether PageDirectory::unmap can fail after read_pde reported a present entry and the matching page table was found.",
+    "It is unknown whether hw_unmap_user can fail, panic, defer invalidation, or affect mappings beyond vaddr.",
+    "UserFrame::new(frame_address) identity and ownership semantics are not shown.",
+    "Concurrency, aliasing, and external observation during intermediate mutations are unspecified.",
+    "The body does not explicitly remove separate user-frame metadata; whether such metadata changes through page_table.unmap or another hidden mechanism is unknown."
+  ],
+  "recommended_next_step": "Expand O1 first to define the projection of M and establish the meaning of Ok(None) and returned frame identity. Then discharge O2 and O5. If O5 demonstrates a reachable late failure, adopt the readiness-conditioned contract or make cleanup transactional before asserting failure atomicity."
+}

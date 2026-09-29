@@ -1,0 +1,300 @@
+{ "recommended_candidate_id": "candidate-a", "candidates": [
+    {
+      "id": "candidate-a",
+      "name": "snapshot projection equality",
+      "pre_condition": "The caller supplies an accepted, decodable SavedState whose inventory and
+serialized component schemas are compatible with the already constructed LoadedVm. The VM is in the
+stopped PreparingRestore phase; state_units and partition VPs are stopped; restore_start_guard is
+not relied upon yet. Destination memory has already been prepared from the snapshot memory artifact
+and must remain unchanged by this helper. Destination compatibility class, VP capacity,
+external-resource bindings, and host operational objects are valid and must be retained. Saved VP
+entries have unique stable identities, cover the snapshot VP capacity as required by the partition
+restore format, and map to destination VPs by stable VP index; the selected active VP count is at
+most capacity. Snapshot active-component state addresses known active components. Pending/deferred
+destination component state is valid but is not implicitly snapshot-owned unless its component
+contract explicitly identifies a serialized field as such. If restore_time is Some((downtime,
+saved_tsc_hz, saved_apic_hz)), the destination exposes the required clocks, its TSC frequency equals
+saved_tsc_hz, any supplied APIC frequency equals the destination APIC frequency, and successful
+downtime arithmetic is representable.",
+      "post_condition": "On Ok, the VM remains at a stopped pre-execution boundary: running is
+false, no VP has executed restored guest state, and restore_start_guard holds the partition VPs
+stopped until a later resume operation releases it. Snapshot-owned partition state and each active
+component's serialized guest-relevant state equal the accepted snapshot state. For every
+instantiated destination VP with stable index i in the selected active set, its restorable state
+equals saved VP state i; destination VPs outside that set retain their valid initial/default state.
+Destination memory is unchanged from the caller-prepared memory image. Compatibility, VP capacity,
+external-resource identities and bindings, and other destination/host operational state are
+preserved, except for non-semantic profiling activity. Pending or deferred component state remains
+destination-owned and unchanged unless an explicit component-level saved-state contract classifies a
+particular pending field as snapshot-owned. With no restore_time, snapshot clock state is restored
+without elapsed-time adjustment. With restore_time, guest-visible device time, instantiated VP TSC
+state and applicable APIC deadline state on x86_64, and the backend snapshot clock represent
+snapshot time advanced exactly once by downtime at the validated frequencies; no other state may
+change merely because time was advanced. This contract makes no readiness, input-gating,
+device-start, or eventual-resume guarantee. On Err, no rollback or atomicity guarantee is
+inferred.",
+      "semantic_difference": "This candidate compares only the snapshot-owned projection, applies
+the explicit downtime transformation, restores selected VPs by stable identity, retains
+destination-only and pending/deferred state, and requires a stopped success boundary. It is stronger
+than orchestration-only but avoids the full-state candidate's incorrect ownership transfer.",
+      "discriminator": "Restore a four-VP snapshot into a compatible destination with capacity four
+but only VPs 0 and 1 instantiated, destination-specific disk handles, and a pending host I/O
+completion. Success requires VPs 0 and 1 to receive saved states by index, VPs 2 and 3 to retain
+initial/default destination state, disk handles and pending I/O to remain destination-owned,
+snapshot clocks to advance by downtime, and all VPs to remain stopped."
+    },
+    {
+      "id": "candidate-b",
+      "name": "strong full-state equality",
+      "pre_condition": "The accepted snapshot is assumed to define a complete LoadedVm state,
+including memory, all capacity VPs, active and pending/deferred component state, compatibility,
+resource bindings, and host operational state, or the destination is assumed already identical to
+those snapshot values. restore_time must be valid and frequency-compatible, and the VM must
+initially be stopped.",
+      "post_condition": "On Ok, the complete destination VM state equals the complete serialized
+snapshot state after the downtime transformation: all VP slots, active and pending/deferred
+component state, memory, compatibility, capacity, resource identities and bindings, and host
+operational details agree with the snapshot, while the guest remains stopped behind
+restore_start_guard. Destination resources are preserved only when they are identical to the
+snapshot's purported resource values. With restore_time, every clock-bearing field equals snapshot
+time plus exactly the requested downtime; without it, every such field equals snapshot time.",
+      "semantic_difference": "This intentionally stronger interpretation treats nearly all state as
+snapshot-owned rather than projecting snapshot-owned guest state over an already prepared
+destination. It conflicts with the stated ownership of prepared memory, compatibility, capacity,
+external bindings, host runtime details, and retained pending/deferred state.",
+      "discriminator": "If the destination binds the restored virtual disk to a newly opened host
+handle that differs from the source handle but denotes the correct destination resource, candidate-a
+permits and preserves it; candidate-b rejects the result or requires replacing it with the source
+runtime identity."
+    },
+    {
+      "id": "candidate-c",
+      "name": "orchestration-only success",
+      "pre_condition": "The VM and supplied arguments satisfy only the operational requirements
+needed for each invoked API not to panic or fail: state units and VPs are stopped, the SavedState is
+accepted by restore, required frequencies are exposed and compatible when restore_time is present,
+and time adjustments are supported.",
+      "post_condition": "On Ok, frequency checks and requested restore/time-adjustment calls
+completed without returning errors, restore_start_guard is present, running remains false, and the
+VM has not intentionally crossed the execution boundary. Destination memory, compatibility,
+capacity, and resource bindings are not intentionally replaced. No extensional equality is promised
+for partition state, stable-ID VP state, active component state, retained pending/deferred state, or
+adjusted clock values beyond whatever the callees independently guarantee.",
+      "semantic_difference": "This candidate specifies control flow and stopping but delegates all
+semantic restoration claims to callees. It cannot establish the top-level requirement that accepted
+snapshot-owned guest state is actually represented after success.",
+      "discriminator": "A component restore implementation returns Ok while ignoring its blob.
+Candidate-c still regards restore_snapshot_state as successful if orchestration completes and the
+VPs are stopped; candidate-a and candidate-b reject the resulting state."
+    } ], "callees": [
+    {
+      "name": "Partition::tsc_frequency_hz and Partition::apic_frequency_hz",
+      "signature": "query destination guest clock frequency -> Result<Option<u64>>",
+      "pre_condition": "The destination partition backend is initialized and restore_time requires
+the queried clock information.",
+      "post_condition": "The returned values accurately describe destination clock frequencies and
+querying does not mutate snapshot-owned state, destination resources, or execution state. For
+successful timed restore, TSC is present and equals the saved TSC frequency; APIC is present, and if
+the snapshot supplied an APIC frequency it equals that value."
+    },
+    {
+      "name": "Partition::set_tsc_frequency_hz",
+      "signature": "set guest TSC frequency(u64) -> Result<()>",
+      "pre_condition": "The queried destination TSC frequency already equals the supplied saved
+frequency.",
+      "post_condition": "The effective TSC frequency remains the validated value and no unrelated
+partition, VP, memory, resource, or lifecycle state changes. This idempotence/noninterference
+property requires a backend contract."
+    },
+    {
+      "name": "LoadedVm::restore",
+      "signature": "restore(SavedState) -> Future<Result<()>>",
+      "pre_condition": "The VM is stopped; the saved inventory is empty only under the legacy
+compatibility rule or otherwise exactly validates against the destination state-unit inventory;
+blobs are decodable and compatible; VP identities and selected destination VP set satisfy the
+partition-unit restore contract.",
+      "post_condition": "Every snapshot-owned partition and active-component field represented by a
+consumed blob equals its saved value. VP state is selected by stable VP index: each instantiated
+selected VP receives its matching saved state, while non-instantiated destination VP state remains
+valid and unchanged. Missing mutable-state blobs leave the corresponding destination state
+unchanged. Pending/deferred state and destination runtime bindings are retained unless a component's
+explicit saved-state contract makes a field snapshot-owned. State units and VPs remain stopped, and
+memory, compatibility, capacity, external resources, and host operational state are not changed."
+    },
+    {
+      "name": "StateUnits::advance_time",
+      "signature": "advance_time(Duration) -> Future<Result<()>>",
+      "pre_condition": "All state units are stopped, snapshot state has already been restored, and
+downtime is a valid restore adjustment.",
+      "post_condition": "Each participating unit advances only its guest-visible snapshot
+clock/deadline state by exactly the requested downtime, in dependency order, without starting units
+or modifying resource bindings, retained pending/deferred state, or non-time snapshot fields. Units
+whose time derives from shared VM time may remain unchanged."
+    },
+    {
+      "name": "PartitionUnit::advance_tsc",
+      "signature": "advance_tsc(Duration, tsc_hz, Option<apic_hz>) -> Future<Result<()>>",
+      "pre_condition": "On x86_64 all instantiated VPs are stopped; tsc_hz is the validated
+saved/destination frequency; the APIC frequency is either the validated saved frequency or the
+exposed destination frequency; arithmetic is representable.",
+      "post_condition": "For every instantiated VP selected by stable destination identity, TSC
+advances by exactly downtime times tsc_hz, active TSC-deadline/APIC timer state is transformed
+consistently using apic_hz, non-clock VP state is unchanged, and no VP starts.
+Dormant/uninstantiated VP state is not overwritten."
+    },
+    {
+      "name": "Partition::advance_snapshot_time",
+      "signature": "advance_snapshot_time(Duration) -> Result<()>",
+      "pre_condition": "Snapshot partition state has been restored and the backend supports the
+requested downtime adjustment.",
+      "post_condition": "The backend-specific guest snapshot clock advances exactly once by
+downtime, without advancing execution or mutating unrelated partition state, memory, capacity,
+compatibility, or external resources."
+    },
+    {
+      "name": "PartitionUnit::temporarily_stop_vps",
+      "signature": "temporarily_stop_vps() -> Future<StopGuard>",
+      "pre_condition": "The partition unit is live enough to accept control requests; calling it on
+already stopped VPs is valid.",
+      "post_condition": "All instantiated VPs are stopped before the future returns. The returned
+guard keeps them stopped until it is dropped, and storing it in restore_start_guard does not start
+units or alter restored guest state."
+    } ], "implementation_hypotheses": [
+    {
+      "claim": "The caller preserves the pre-execution branch distinction: when saved_state is
+present it invokes restore_snapshot_state and skips PCI reassignment and firmware loading, then
+returns the LoadedVm without calling resume.",
+      "code_evidence": "Caller lines 3328-3340 choose either restore_snapshot_state or
+assign_pci_resources plus load_firmware and then immediately return Ok(this).",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Timed restore validates destination clock compatibility before restoring snapshot
+state, and set_tsc_frequency_hz is called only after equality is checked.",
+      "code_evidence": "The first restore_time block queries TSC/APIC frequencies, uses ensure! for
+equality, and calls set_tsc_frequency_hz(saved_frequency) after the TSC equality check.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "The time transformation is ordered after saved-state restoration and before
+acquisition of the persistent stop guard.",
+      "code_evidence": "self.restore(saved_state).await precedes state_units.advance_time,
+partition_unit.advance_tsc, and partition.advance_snapshot_time; temporarily_stop_vps is the final
+semantic operation.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "The ordering preserves the stopped pre-execution boundary only if construction and
+callee contracts guarantee that state units and VPs are already stopped throughout restore and time
+adjustment.",
+      "code_evidence": "StateUnits::restore and StateUnits::advance_time assert that units are not
+running, and VpSet::restore and advance_tsc require stopped VPs, but restore_start_guard is acquired
+only at the end.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Stable VP identity is index-based, saved state is validated for the full VP
+capacity, and only the instantiated prefix is restored.",
+      "code_evidence": "select_instantiated_vp_states first calls
+validate_restore_vp_indices(vp_capacity, ...), then filters entries with vp_index.index() <
+instantiated_vp_count; VpSet::restore dispatches each selected blob to the VP at that index.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Destination memory, compatibility, capacity, and external-resource bindings are
+preserved by this helper.",
+      "code_evidence": "The body has no direct memory, compatibility, capacity, or
+resource-assignment operation, and the caller skips assign_pci_resources on the restore path.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Active component state is restored while destination pending/deferred state is
+retained.",
+      "code_evidence": "LoadedVm::restore passes opaque SavedStateUnit blobs to StateUnits::restore.
+This function does not inspect or separate active state from pending/deferred fields.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "The existing abstract projection that overlays saved pending_component_state is
+potentially inconsistent with an intent that pending/deferred state is destination-owned and
+retained.",
+      "code_evidence": "restore_snapshot_projection applies overlay_component_state to both
+active_component_state and pending_component_state, whereas the target body provides no ownership
+distinction.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "The final success boundary is stopped and is released only by later resume
+behavior.",
+      "code_evidence": "The function stores temporarily_stop_vps().await in restore_start_guard and
+returns; resume later starts state units, takes the guard, and sets running = true.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "The function provides transactional restore semantics on failure.",
+      "code_evidence": "Frequency setting, unit restoration, and time adjustments occur sequentially
+with ? propagation and no rollback; a later failure can leave earlier mutations applied.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Full-state equality with the source snapshot is an appropriate caller-facing success
+condition.",
+      "code_evidence": "The body restores SavedState units and clocks but does not replace prepared
+memory, compatibility, VP capacity, destination bindings, or host operational objects.",
+      "disposition": "challenged"
+    } ], "proof_obligations": [
+    "Provide an executable decoder/view refinement showing exactly which SavedState bytes denote
+partition state, stable-index VP state, active component state, and any legitimately snapshot-owned
+pending fields; the current decoded_restore_request_view is uninterpreted.",
+    "Prove or test that LoadedVm enters restore_snapshot_state with state_units stopped, partition
+VPs stopped, running false, and no possible guest execution before the final StopGuard is
+installed.",
+    "Give a refinement proof for LoadedVm::restore and every StateUnit::restore implementation:
+accepted blobs establish their declared snapshot-owned state, reject malformed state, preserve
+destination-only resources and host operational details, and do not start execution.",
+    "Prove that state-unit inventory validation is sufficient for component identity and schema
+compatibility, including the legacy empty-inventory path.",
+    "Prove or test stable VP mapping: saved VP identifiers are unique and complete for capacity,
+selected instantiated VPs are restored by index, and unselected or dormant destination VPs retain
+valid initial/default state.",
+    "Specify and verify whether pending/deferred state is snapshot-owned per component. In
+particular, show that opaque restore blobs neither overwrite destination pending work nor omit
+pending state that must be restored.",
+    "Prove frame conditions for memory, compatibility, VP capacity, external-resource attachments,
+and host operational state across restore, all time-adjustment calls, and final stop acquisition;
+absence of direct writes in this body is insufficient because callees may mutate them.",
+    "Prove that StateUnits::advance_time, PartitionUnit::advance_tsc, and
+Partition::advance_snapshot_time collectively advance each guest-visible clock exactly once, use the
+intended unit conversions and frequencies, and do not double-adjust shared clock-derived devices.",
+    "On x86_64, verify TSC arithmetic, overflow rejection, APIC timer/deadline transformation, and
+the saved_apic_frequency None policy. On other architectures, specify which clock state replaces or
+omits the x86 TSC obligation.",
+    "Prove StopGuard lifetime semantics: temporarily_stop_vps returns only after all VPs are
+stopped, storing the guard prevents restart, and no intervening assignment or drop releases the stop
+before later resume.",
+    "Use an end-to-end test with differing source and destination resource handles, reduced active
+VP count, pending/deferred component work, and nonzero downtime to discriminate projection equality
+from full-state and orchestration-only contracts.",
+    "If failure-state guarantees are desired, add and prove rollback or poison/discard semantics;
+the current Result contract safely specifies only successful returns." ], "uncertainties": [
+    "SavedStateUnit blobs are opaque at this level, so active versus pending/deferred ownership
+cannot be determined from restore_snapshot_state alone.",
+    "It is not established here whether caller-prepared memory already equals the accepted snapshot
+memory artifact; candidate-a requires that as a caller obligation and only preserves memory across
+this helper.",
+    "The meaning of an empty SavedState.inventory appears to be legacy compatibility, but its
+accepted component-set semantics require an explicit contract.",
+    "The selected active VP set appears to be an instantiated index prefix rather than an arbitrary
+stable-ID subset; whether that restriction is intended must be confirmed by the load-level
+contract.",
+    "temporarily_stop_vps internally unwraps its control call, so channel failure may panic rather
+than return Err; the caller-facing failure model should state whether panic is excluded.",
+    "It is unclear whether set_tsc_frequency_hz has backend side effects even when setting the
+already equal frequency.",
+    "When saved_apic_frequency is None, the implementation still requires a destination APIC
+frequency and uses it for x86 TSC/APIC adjustment; whether this is the intended compatibility policy
+needs testing or a backend contract.",
+    "Natural-language comments and the existing MATCH-like abstract views are heuristic evidence
+only; loaded_vm_representation and decoded_restore_request_view remain uninterpreted and therefore
+do not prove the recommended postcondition." ]
+}

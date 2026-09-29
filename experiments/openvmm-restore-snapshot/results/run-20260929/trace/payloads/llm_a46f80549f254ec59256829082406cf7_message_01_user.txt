@@ -1,0 +1,112 @@
+Programming language: Rust
+
+Code block:
+```rust
+Line 1:     async fn restore_snapshot_state(
+Line 2:         &mut self,
+Line 3:         saved_state: SavedState,
+Line 4:         restore_time: Option<(Duration, u64, Option<u64>)>,
+Line 5:     ) -> anyhow::Result<()> {
+Line 6:         if let Some((_, saved_frequency, saved_apic_frequency)) = restore_time {
+Line 7:             let destination_frequency = self
+Line 8:                 .inner
+Line 9:                 .partition
+Line 10:                 .tsc_frequency_hz()?
+Line 11:                 .context("destination backend does not expose a guest TSC frequency")?;
+Line 12:             anyhow::ensure!(
+Line 13:                 destination_frequency == saved_frequency,
+Line 14:                 "destination TSC frequency {destination_frequency} Hz does not match saved frequency {saved_frequency} Hz"
+Line 15:             );
+Line 16:             self.inner.partition.set_tsc_frequency_hz(saved_frequency)?;
+Line 17:             let destination_apic_frequency = self
+Line 18:                 .inner
+Line 19:                 .partition
+Line 20:                 .apic_frequency_hz()?
+Line 21:                 .context("destination backend does not expose a local APIC frequency")?;
+Line 22:             if let Some(saved_apic_frequency) = saved_apic_frequency {
+Line 23:                 anyhow::ensure!(
+Line 24:                     destination_apic_frequency == saved_apic_frequency,
+Line 25:                     "destination APIC frequency {destination_apic_frequency} Hz does not match saved frequency {saved_apic_frequency} Hz"
+Line 26:                 );
+Line 27:             }
+Line 28:         }
+Line 29:         let saved_state_restore = openvmm_defs::profile::ProfileSpan::start();
+Line 30:         self.restore(saved_state)
+Line 31:             .await
+Line 32:             .context("loadedvm restore failed")?;
+Line 33:         saved_state_restore.complete("restore", "saved_state_restore", Default::default());
+Line 34:         if let Some((downtime, frequency, saved_apic_frequency)) = restore_time {
+Line 35:             let state_time_advance = openvmm_defs::profile::ProfileSpan::start();
+Line 36:             self.state_units
+Line 37:                 .advance_time(downtime)
+Line 38:                 .await
+Line 39:                 .context("failed to advance restored VM time")?;
+Line 40:             state_time_advance.complete("restore", "state_time_advance", Default::default());
+Line 41:             #[cfg(guest_arch = "x86_64")]
+Line 42:             {
+Line 43:                 let apic_frequency =
+Line 44:                     match saved_apic_frequency {
+Line 45:                         Some(frequency) => frequency,
+Line 46:                         None => self.inner.partition.apic_frequency_hz()?.context(
+Line 47:                             "destination backend does not expose a local APIC frequency",
+Line 48:                         )?,
+Line 49:                     };
+Line 50:                 let vp_tsc_advance = openvmm_defs::profile::ProfileSpan::start();
+Line 51:                 self.inner
+Line 52:                     .partition_unit
+Line 53:                     .advance_tsc(downtime, frequency, Some(apic_frequency))
+Line 54:                     .await
+Line 55:                     .context("failed to advance restored vCPU TSC")?;
+Line 56:                 vp_tsc_advance.complete("restore", "vp_tsc_advance", Default::default());
+Line 57:             }
+Line 58:             let backend_time_advance = openvmm_defs::profile::ProfileSpan::start();
+Line 59:             self.inner
+Line 60:                 .partition
+Line 61:                 .advance_snapshot_time(downtime)
+Line 62:                 .context("failed to advance backend snapshot clock")?;
+Line 63:             backend_time_advance.complete("restore", "backend_time_advance", Default::default());
+Line 64:         }
+Line 65:         let restore_vp_stop = openvmm_defs::profile::ProfileSpan::start();
+Line 66:         self.restore_start_guard = Some(self.inner.partition_unit.temporarily_stop_vps().await);
+Line 67:         restore_vp_stop.complete("restore", "restore_vp_stop", Default::default());
+Line 68:         Ok(())
+Line 69:     }
+```
+
+Condition A (what the code actually does):
+Let S0 be the destination state on entry and let Snap be the snapshot represented by saved_state. The function consumes saved_state. It returns either Ok(()) or an anyhow::Error; Rust unwinding occurs only if an invoked operation panics, which is outside the Result contract.
+
+Success: If the result is Ok(()), then self is mutably available again and the following hold. (1) If restore_time = None, no frequency query or setter and no restore-time advancement is performed. (2) If restore_time = Some((d, f_tsc, f_apic_saved)), the destination exposed a TSC frequency equal to f_tsc; set_tsc_frequency_hz(f_tsc) succeeded and left the effective TSC frequency equal to f_tsc while preserving unrelated partition state; the destination exposed an APIC frequency f_apic_dest; and, if f_apic_saved = Some(f), then f_apic_dest = f. (3) self.restore(Snap) completed: all and only snapshot-owned guest-relevant state is restored; active snapshot components are active, pending/deferred state retains its snapshot status, destination-owned memory preparation, capacity, external bindings, backend objects, resources, and host-operational details are preserved, saved VP state is associated by stable identity, unmatched destination VPs retain valid initial/default state, and no VP was started. (4) If restore_time = Some((d, f_tsc, f_apic_saved)), every applicable restored state-unit clock was advanced exactly by d, without changing excluded wall-clock or host-runtime state or activating pending/deferred state. On x86_64, every applicable saved VP's TSC-related restored time state was additionally advanced exactly by d using f_tsc; its APIC timer state was advanced according to the advance_tsc contract using f_apic_saved when present and otherwise f_apic_dest, with no duplication of adjustments owned by state units, stable VP identity preserved, unmatched VPs left in valid initial/default state, and no VP started. On non-x86_64 builds, this VP TSC/APIC advancement block is absent. The backend snapshot-owned clock was advanced exactly by d, without duplicating state-unit or VP adjustments or changing destination-owned operational details. (5) All VPs are stopped before return, and self.restore_start_guard contains the newly returned StopGuard, which keeps every VP stopped until that guard is later released or dropped. Replacing any previous guard does not cause VPs to resume because the new guard has already established the stop condition. Thus the VM is at a quiescent pre-execution boundary. Profiling-span creation and completion do not alter guest-visible VM state.
+
+Formally, result = Ok(()) implies RestoredSnapshotOwned(self, Snap) ∧ PreservedDestinationOwned(self, S0) ∧ Quiescent(self) ∧ AllVPsStopped(self) ∧ HoldsStopGuard(self.restore_start_guard) ∧ (restore_time = None ⇒ TimeState(self) = RestoredTime(Snap)) ∧ (restore_time = Some((d,f,a)) ⇒ EffectiveTscHz(self) = f ∧ StateUnitTime(self) = AdvanceStateUnitTime(RestoredStateUnitTime(Snap), d) ∧ BackendSnapshotTime(self) = Advance(RestoredBackendSnapshotTime(Snap), d) ∧ (cfg(x86_64) ⇒ VPTime(self) = AdvanceVPTimeByStableIdentity(RestoredVPTime(Snap), d, f, a.or(ExposedDestinationApicHz(S0))))) .
+
+Error and early-return paths: Evaluation stops at the first failing query, missing required frequency, mismatch, setter failure, restore failure, time-advance failure, or backend-clock failure; the returned error retains the context added at the corresponding call site. No later operation executes. Specifically: a TSC-query error, missing TSC frequency, or TSC mismatch occurs before the setter and before restore; a setter error occurs after its attempted call but before the APIC query and restore; an APIC-query error, missing APIC frequency, or supplied-APIC mismatch occurs before restore; a restore error occurs after any successful frequency setup but before every time adjustment and before installation of the final stop guard; a state-unit advance error occurs after snapshot restoration and may leave partial component-time advancement according to that callee's failure semantics, but prevents VP/backend advancement and final guard installation; on x86_64, a fallback APIC-query error occurs after state-unit advancement but before VP/backend advancement, and an advance_tsc error may leave partial VP-time advancement according to that callee's failure semantics but prevents backend advancement and final guard installation; an advance_snapshot_time error occurs after prior restoration and applicable component/VP adjustments but before final guard installation. There is no transactional rollback: every mutation completed before an error remains in effect. On all error paths, self remains valid under the contracts of the operations that completed or failed, but this function does not guarantee complete restoration, complete time adjustment, installation of a new restore_start_guard, or the success-return stop boundary. If temporarily_stop_vps completes normally, the function cannot subsequently return Err because only infallible profiling completion and Ok(()) remain.
+
+Condition B (what the specification requires):
+On Ok(()), the entire mutable destination VM state equals the complete saved source state, except that all represented clocks are advanced by downtime and the VM is stopped. Every destination VP and component must have an exact snapshot counterpart; no unmatched VP default state, destination-specific resource binding, capacity setting, or pending/deferred state may remain unless it is itself encoded identically in the snapshot.
+
+Additional context:
+tsc_frequency_hz() -> Result<Option<u64>>; apic_frequency_hz() -> Result<Option<u64>>; set_tsc_frequency_hz(u64) -> Result<()>
+Pre-condition: When restore_time is present, the caller queries both frequencies, rejects a missing TSC frequency, rejects TSC mismatch, rejects a missing APIC frequency, and rejects APIC mismatch when the snapshot supplied one; set_tsc_frequency_hz is called only with the already equal saved TSC frequency.
+Post-condition: Queries accurately describe the destination frequencies without mutating guest state. The setter preserves all unrelated partition state and leaves the effective TSC frequency equal to saved_frequency. These contracts are needed to show that time advancement uses compatible units and does not import unrelated source runtime configuration.
+
+async restore(SavedState) -> Result<()>
+Pre-condition: The destination VM and its components are prepared and compatible, execution is quiescent, destination-owned resources are valid, and SavedState is available for one restore. Frequency compatibility has already been checked when restore_time is present.
+Post-condition: All and only snapshot-owned guest-relevant state is restored. Active component state is restored as active, pending/deferred state remains pending/deferred according to snapshot semantics, and destination-owned memory preparation, capacity, external bindings, backend objects, and host details are preserved. Saved VP records are selected by stable identity; unmatched destination VPs retain valid initial/default state. The callee does not start VPs and leaves the VM at a quiescent pre-execution boundary. This is the principal contract required for candidate-a and cannot be inferred from this caller body.
+
+async advance_time(Duration) -> Result<()>
+Pre-condition: Snapshot component state has been restored, the VM is quiescent, downtime is representable, and components expose a well-defined restore-time adjustment.
+Post-condition: Every applicable restored state-unit clock is advanced exactly by downtime, without advancing excluded wall-clock or host-runtime state, starting execution, changing resource bindings, or converting retained pending/deferred state into active state.
+
+async advance_tsc(Duration, tsc_hz, Option<apic_hz>) -> Result<()>
+Pre-condition: On x86_64, VP state is restored and quiescent; tsc_hz equals the validated saved TSC frequency; apic_hz is either the validated saved frequency or the exposed destination frequency when the old snapshot omitted it; downtime is representable.
+Post-condition: The restored time state of every applicable saved VP is advanced exactly by downtime using the supplied frequencies, selected by stable VP identity, while unmatched destination VPs retain valid initial/default state and no VP begins execution. It must specify whether and how APIC timer state is advanced and avoid double-adjusting state already handled by StateUnits::advance_time.
+
+advance_snapshot_time(Duration) -> Result<()>
+Pre-condition: Snapshot state and component/VP time have been restored or adjusted as required, the partition is quiescent, and downtime is representable by the backend snapshot clock.
+Post-condition: The backend's snapshot-owned clock is advanced exactly by downtime, without changing destination-owned operational details, starting execution, or duplicating adjustments owned by state units or VPs.
+
+async temporarily_stop_vps() -> StopGuard
+Pre-condition: The partition unit is valid and may contain stopped or running VPs.
+Post-condition: Before completion, all VPs are stopped; the returned guard keeps them stopped until released or dropped. Storing it in restore_start_guard establishes the success-return pre-execution boundary and must not implicitly resume VPs while replacing any previous guard.
+Is there a concrete valid input where the code's behavior violates the specification? Enumerate all cases required by condition B and check if condition A covers each one. Provide a specific counterexample if any case is missing. Return only the JSON object.

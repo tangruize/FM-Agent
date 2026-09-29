@@ -1,0 +1,47 @@
+FUNCTION:
+save at openvmm/openvmm_core/src/worker/dispatch.rs:4735-4740
+
+INTENT:
+# OpenVMM snapshot save intent
+
+Analyze `LoadedVm::save` as the state-capture layer used by snapshot and restart workflows.
+
+On success, the returned `SavedState` should represent exactly the snapshot-owned logical state of all participating state units at one quiescent capture boundary, paired with inventory metadata that identifies the compatible unit set. It must not claim equality with the whole destination/runtime object: prepared memory, host resource bindings, worker channels, and other runtime-only state remain outside this projection unless explicitly included by a state-unit contract.
+
+The abstraction should distinguish:
+- logical component state from concrete serialization blobs and collection order;
+- the inventory/identity domain from the captured values;
+- snapshot-owned state from destination- or host-owned state;
+- a successful complete capture from partial work performed before an error.
+
+Determine whether the body itself proves a coherent complete snapshot, or only packages the result of `StateUnits::save` with a separately observed inventory. Pay particular attention to whether inventory and saved units are drawn from the same stable generation, whether the caller must already have stopped/quiesced mutation, whether optional/unsaved units have intentional semantics, and what failure permits.
+
+Generate a candidate contract and proof obligations suitable for later composing with restore as a projection round-trip theorem. Do not treat the analysis as proof and do not traverse unrelated callees automatically.
+
+
+CALLER CONTEXT:
+(not supplied)
+
+PARENT BLOCKING OBLIGATION:
+(top-level function; no parent obligation)
+
+SOURCE:
+```rust
+    async fn save(&mut self) -> anyhow::Result<SavedState> {
+        Ok(SavedState {
+            units: self.state_units.save().await?,
+            inventory: self.state_units.inventory(),
+        })
+    }
+
+```
+
+Return an object with contract {pre_condition, post_condition, failure_condition}, abstraction {name, abstract_state, projection, preserved_state, hidden_representation, observation_boundary}, implementation_assessment [{claim,evidence,disposition}], obligations [{id,title,claim,why_blocking,kind,suggested_callees:[{symbol,file_hint,reason}]}], candidate_variants [{name,semantic_difference,discriminator}], uncertainties [string], and recommended_next_step.
+
+Requirements:
+- Separate what this body establishes from what requires callee contracts.
+- Produce at least one stronger and one weaker candidate variant with a concrete discriminator.
+- The abstraction must identify observable state, its projection, preserved state, hidden representation, and the exact observation boundary.
+- Obligations must be independently selectable for later `expand`; use stable short ids such as O1, O2.
+- Include bug hypotheses as challenged assessments, but do not report an unproved hypothesis as a bug.
+- Prefer obligations that can be discharged by a callee contract, executable attack, or proof lemma.

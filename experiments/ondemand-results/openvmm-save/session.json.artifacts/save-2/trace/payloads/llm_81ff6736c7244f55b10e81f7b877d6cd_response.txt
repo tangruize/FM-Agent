@@ -1,0 +1,166 @@
+{
+  "contract": {
+    "pre_condition": "When execution reaches the assertion, self.running must be false; otherwise the function panics. Stable unit membership, exclusive registry access across await points, and consistency between self.running and State::Stopped are not established by this body.",
+    "post_condition": "On Ok(states), the function has awaited one run_op invocation configured with operation name \"save\", initial state State::Stopped, operation state State::Saving, final state State::Stopped, and request StateRequest::Save. It then applies extract to that invocation's result. For each extract callback invocation with Some(state), the callback produces SavedStateUnit { name: name.to_string(), state }; with None, it produces no value. This body returns neither an inventory nor a generation identifier and does not itself establish complete coverage or same-generation membership.",
+    "failure_condition": "If self.running is true at the assertion, the function panics rather than returning StateTransitionError. Otherwise, an error returned or synthesized through run_op and extract is propagated by ?. The resulting lifecycle, logical state, and membership after error, panic, or future cancellation are not established by this body."
+  },
+  "abstraction": {
+    "name": "Stopped-state unit capture",
+    "abstract_state": "A participating-unit domain D, a mapping V from unit identities to optional saved logical values, a lifecycle phase, and, if the representation supports it, a membership generation G.",
+    "projection": "On Ok(states), the observable projection is the ordered sequence of pairs [(entry.name, entry.state)] returned by extract. Relative to extract's callback inputs, each Some(state) is projected to an owned name and state, while each None is omitted. No generation or complete-domain projection is directly observable.",
+    "preserved_state": "The requested lifecycle endpoint is State::Stopped because run_op receives State::Stopped as its final-state argument. The comment expresses an intent that save not observably mutate state. Actual preservation of lifecycle, logical values, membership, names, and ordering requires contracts for run_op, extract, and the per-unit save operation.",
+    "hidden_representation": "The state-unit registry, membership or version metadata, unit-name storage, run_op traversal and scheduling state, per-unit responses contained in r, extract's filtering and ordering behavior, and mutations occurring while run_op is awaited.",
+    "observation_boundary": "The immediate caller-visible boundary is completion of the future with Ok(Vec<SavedStateUnit>) or Err(StateTransitionError), or panic at assert!(!self.running). Preservation claims also concern later observations of self, but this function exposes no inventory or generation token at completion."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "Every returned SavedStateUnit is constructed from callback data supplied while extracting the result of this invocation's single run_op call.",
+      "evidence": "The body performs one awaited run_op call, stores its result in r, and calls extract once on r with a callback that constructs SavedStateUnit directly from name and state.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "The operation is configured to transition from Stopped through Saving and back to Stopped.",
+      "evidence": "The run_op call is passed State::Stopped, State::Saving, and State::Stopped in those positions.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Successful completion guarantees that self is observably restored to State::Stopped.",
+      "evidence": "State::Stopped is passed as the requested final state, but run_op's contract and implementation are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "All returned values belong to one stable membership generation.",
+      "evidence": "The body holds &mut self across the await, but it contains no explicit membership snapshot, lock, generation token, or constraint on registry mutation through interior or shared state.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "The returned states and the parent inventory describe the same generation.",
+      "evidence": "This function neither obtains nor returns an inventory and exposes no generation identity linking its result to a separate inventory operation.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Save does not observably mutate logical state.",
+      "evidence": "A comment states that save will not observably mutate state, but the unshown asynchronous run_op and per-unit StateRequest::Save handlers determine whether that property holds.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "A successful result contains exactly one entry for every participating unit.",
+      "evidence": "The extraction callback maps None to no entry, and the meaning of None, duplicate handling, and successful extraction completeness are not shown.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Names in saved entries are stable, unique identities matching inventory identities.",
+      "evidence": "The body copies each supplied name with to_string(), but neither the source and stability of that name nor inventory's identity rules are shown.",
+      "disposition": "unknown"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Stable save membership",
+      "claim": "For every successful save invocation, there exists a generation g and domain D_g selected once by run_op such that membership relevant to the operation remains fixed or logically pinned until r is complete, and every response in r is attributable to a unit in D_g.",
+      "why_blocking": "Without a pinned logical domain, values collected by one invocation may still correspond to different membership generations.",
+      "kind": "callee contract or proof lemma",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::run_op",
+          "file_hint": "state-unit implementation containing run_op",
+          "reason": "Establish when the participating set is selected and whether registration or removal can affect it across await points."
+        }
+      ]
+    },
+    {
+      "id": "O2",
+      "title": "Extraction domain fidelity",
+      "claim": "On successful save extraction, the returned vector contains exactly one SavedStateUnit for every unit in the abstract participating domain D_g, with no duplicate identity and no omission unless D_g explicitly excludes units represented by None.",
+      "why_blocking": "Because the callback drops None, the returned vector may otherwise be an unexplained subset of the generation's unit domain.",
+      "kind": "callee contract or executable attack",
+      "suggested_callees": [
+        {
+          "symbol": "extract",
+          "file_hint": "state-unit implementation defining extract",
+          "reason": "Determine the meaning of None, error aggregation, ordering, duplicate handling, and whether Ok implies complete coverage."
+        }
+      ]
+    },
+    {
+      "id": "O3",
+      "title": "Inventory generation alignment",
+      "claim": "The inventory consumed by the parent is derived from the exact D_g pinned by this save invocation or carries a generation identity proven equal to g.",
+      "why_blocking": "A separately computed inventory may describe a different compatible-unit domain, preventing a coherent projection round trip.",
+      "kind": "cross-operation proof lemma or combined API contract",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::inventory",
+          "file_hint": "state-unit implementation defining inventory",
+          "reason": "Determine whether inventory is immutable, snapshot-based, generation-tagged, or recomputed from mutable membership."
+        },
+        {
+          "symbol": "StateUnits::save",
+          "file_hint": "higher-level call sites or wrappers combining save with inventory",
+          "reason": "Determine whether an enclosing operation pins membership or derives inventory from the same capture domain."
+        }
+      ]
+    },
+    {
+      "id": "O4",
+      "title": "Lifecycle restoration",
+      "claim": "After successful completion, and after each recoverable error path relevant to callers, self is observably in Stopped and no partial transition changes the logical values or membership associated with the capture.",
+      "why_blocking": "The parent cannot interpret the result as a stopped-state snapshot if run_op leaves lifecycle or logical state partially modified.",
+      "kind": "callee contract",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::run_op",
+          "file_hint": "state-unit implementation containing run_op",
+          "reason": "Establish final-state restoration and mutation behavior on success, error, and cancellation."
+        }
+      ]
+    },
+    {
+      "id": "O5",
+      "title": "Name identity coherence",
+      "claim": "Each copied name is the stable inventory identity of the same unit in D_g, and names are unique within D_g.",
+      "why_blocking": "Renamed or duplicate identities prevent a well-defined correspondence between saved values and inventory entries even if membership is stable.",
+      "kind": "representation invariant or proof lemma",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::run_op",
+          "file_hint": "state-unit registry and operation implementation",
+          "reason": "Establish the source and stability of names supplied for extraction."
+        },
+        {
+          "symbol": "StateUnits::inventory",
+          "file_hint": "state-unit implementation defining inventory",
+          "reason": "Establish that inventory uses the same identity relation and enforces uniqueness."
+        }
+      ]
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Atomic generation capture",
+      "semantic_difference": "Stronger: save pins one membership generation g, captures every unit in D_g exactly once, and inventory is produced from the same pinned domain or carries the same generation token.",
+      "discriminator": "Suspend a per-unit save operation, mutate registration, then resume; verify that returned states and inventory both retain the pre-mutation generation and exactly the same identity domain."
+    },
+    {
+      "name": "Borrow-stable current registry",
+      "semantic_difference": "Intermediate: exclusive borrowing keeps membership unchanged during save, but no generation is recorded; coherence holds only if all membership mutation is mediated by this StateUnits value and inventory is observed before any later mutation.",
+      "discriminator": "Inspect or test whether callbacks, shared ownership, or interior mutability can change membership while &mut self is held. Any such path distinguishes this variant from a borrow-stable registry."
+    },
+    {
+      "name": "Per-unit best-effort capture",
+      "semantic_difference": "Weaker: entries are individually valid save responses collected during one run_op invocation, but membership may vary during traversal and None responses may be omitted; no single generation or inventory-domain equality is promised.",
+      "discriminator": "Suspend one unit's save, register or remove another unit, and resume. A successful vector whose identity set matches neither the before nor after inventory supports this variant."
+    }
+  ],
+  "uncertainties": [
+    "The signature and implementation of run_op are not supplied, so traversal timing, concurrency control, participating-set selection, response ordering, and restoration guarantees are unknown.",
+    "The registry representation and mutation paths are not supplied; holding &mut self does not by itself exclude interior mutability, callbacks, or externally shared membership state.",
+    "The contract of extract is not supplied, especially the meaning of None and whether Ok implies complete and unique coverage.",
+    "No inventory implementation or combined save-and-inventory caller is shown, so the required temporal relationship between the two observations is unknown.",
+    "No generation field appears in SavedStateUnit, but generation information could be hidden or membership could be immutable.",
+    "The relationship among self.running, State::Stopped, and membership stability is unspecified.",
+    "Future cancellation while run_op is pending may affect later observable lifecycle or membership state."
+  ],
+  "recommended_next_step": "Expand O1 by analyzing the contract of StateUnits::run_op and the registry mutation invariant, then discharge O2 and O3 using extract and inventory contracts. Until those obligations are proven, adopt the weaker per-unit best-effort variant and do not claim same-generation capture."
+}

@@ -1,0 +1,329 @@
+{
+  "contract": {
+    "pre_condition": "The caller provides exclusive mutable access to a prepared destination LoadedVm and prevents concurrent start, resume, or mutation of guest execution state. The supplied saved_state is an accepted snapshot whose format, architecture, component identities, resource requirements, and compatibility have already been validated, unless LoadedVm::restore is explicitly responsible for rejecting them. Destination memory, capacity, host-resource bindings, and backend configuration are valid and remain destination-owned. No VP may execute from the first restore-related mutation through successful return; this must follow from an entry invariant, an existing guard, or a surrounding lifecycle protocol because this body stops VPs only at the end. Stable saved VP identities must be mappable to destination VPs, while unmatched destination VPs must have valid initial or default state. If restore_time is Some((downtime, saved_frequency, saved_apic_frequency)), downtime is an authorized restore transformation and the required destination clock frequencies are available and compatible.",
+    "post_condition": "On Ok(()), the VM is at a pre-execution boundary: all VPs are stopped and remain inhibited by restore_start_guard until the surrounding protocol deliberately releases it. The guest-observable projection of snapshot-owned active state equals the accepted saved_state projection after exactly the transformation authorized by restore_time. Pending or deferred snapshot state remains pending or deferred unless an explicit component contract requires activation. Saved VP state is selected by stable identity, and destination VPs absent from the snapshot retain valid initial or default state. If restore_time is None, this body intentionally applies no downtime adjustment. If restore_time is Some, state-unit time, x86_64 VP clock state, and backend snapshot time are advanced by downtime according to their contracts. Prepared destination memory, capacity, compatibility decisions, external-resource bindings, and host operational state are preserved except where an explicit restore contract permits mutation. Success does not imply resume, readiness, or completion of later post-restore work.",
+    "failure_condition": "Err indicates failure of a frequency query or compatibility check, frequency setting, snapshot restoration, time advancement, or required backend query. The body provides no rollback or failure atomicity: destination state may be partially mutated, including an updated TSC configuration, partially restored components, or partially advanced clock domains. Errors before temporarily_stop_vps do not install restore_start_guard, so safety depends on the entry-state no-execution invariant and callee failure contracts. Callers must not assume that Err preserves the pre-call destination state or permits retry unless separate contracts establish those properties."
+  },
+  "abstraction": {
+    "name": "StoppedRestoredGuestProjection",
+    "abstract_state": "A tuple consisting of snapshot-owned active guest state, snapshot-owned pending or deferred state, a partial map of stable VP identity to VP state augmented by valid defaults for unmatched destination VPs, guest-visible clock domains, an execution-inhibited flag, and destination-owned preparation and host-runtime state.",
+    "projection": "Project the concrete LoadedVm into guest-observable snapshot-owned active state, pending or deferred status, VP state keyed by stable identity, guest-visible clock values, and whether any VP can execute. Compare this with the accepted saved_state projection transformed only by the authorized downtime operation. Exclude destination-owned memory preparation, capacity, compatibility decisions, external-resource bindings, and host-runtime details unless an explicit component contract classifies a field as snapshot-owned.",
+    "preserved_state": "Destination VPs not selected by stable snapshot identity retain valid initial or default state. Prepared destination memory, capacity, compatibility decisions, external-resource bindings, and host operational details remain destination-owned. Pending or deferred state remains pending or deferred absent an explicit activation rule.",
+    "hidden_representation": "Concrete state_units internals, partition and partition_unit backend structures, stop-guard representation and nesting, component serialization formats, restore dispatch ordering, profiling spans, and backend bookkeeping that does not affect the defined guest-observable projection.",
+    "observation_boundary": "The instant Ok(()) is produced after temporarily_stop_vps().await completes and its guard is stored in self.restore_start_guard, but before the caller can release or replace that guard, resume VPs, or perform later readiness work. Intermediate async states are outside the success abstraction only if no VP can execute during them."
+  },
+  "implementation_assessment": [
+    {
+      "claim": "Compatibility checks precede snapshot restoration, and explicit downtime adjustments follow successful restoration.",
+      "evidence": "Frequency queries and equality checks occur before self.restore(saved_state).await; state_units.advance_time, x86_64 partition_unit.advance_tsc, and partition.advance_snapshot_time occur afterward.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Successful return occurs only after a stop guard has been acquired and stored.",
+      "evidence": "The final mutation assigns Some(self.inner.partition_unit.temporarily_stop_vps().await) to restore_start_guard before Ok(()). The effect and lifetime of the guard still require its callee contract.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "The implementation preserves the intended no-execution boundary throughout restoration.",
+      "evidence": "The explicit stop operation occurs only after restore and all time adjustments. No supplied evidence establishes that VPs are already stopped during the preceding awaits.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Replacing restore_start_guard cannot transiently resume VPs.",
+      "evidence": "A new guard is acquired before assignment, but assignment may drop a previous guard under Rust replacement semantics; guard composition and Drop behavior are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "All snapshot-owned active state is restored exactly and destination-owned state is preserved.",
+      "evidence": "The body delegates saved_state wholesale to self.restore(saved_state).await, but no contract for that callee is supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Pending or deferred state remains distinct from active restored state.",
+      "evidence": "The body contains no explicit activation or pending-state handling, and the behavior of LoadedVm::restore is not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "VP state is selected by stable identity and unmatched destination VPs retain valid defaults.",
+      "evidence": "No VP mapping logic or relevant callee contract appears in the supplied context.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "restore_time causes the visible restore-time operations to be executed only after successful snapshot restoration.",
+      "evidence": "The restore_time block containing state-unit, x86_64 VP-clock, and backend-clock advancement follows self.restore(saved_state).await and is skipped when restore_time is None.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "The visible restore-time operations constitute exactly one permitted downtime adjustment with no overlap or unrelated mutation.",
+      "evidence": "Three distinct callees perform advancement, but their affected clock domains, arithmetic, overflow behavior, and framing are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "The saved TSC frequency is checked for destination compatibility before restoration.",
+      "evidence": "The body queries the destination TSC frequency, requires equality with saved_frequency, and only then calls self.restore.",
+      "disposition": "supported"
+    },
+    {
+      "claim": "Calling set_tsc_frequency_hz with an already-equal value preserves all destination-owned state except intended frequency configuration.",
+      "evidence": "The equality check is visible, but the setter's side effects and framing contract are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "APIC frequency handling is consistent when the snapshot has no saved APIC frequency.",
+      "evidence": "When saved_apic_frequency is None, the pre-restore checks do not require an APIC frequency, but the x86_64 advancement path queries and requires the destination APIC frequency after restore and state-unit advancement. A missing destination APIC frequency could therefore cause a late failure after partial mutation.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Architecture-specific handling of the restore-time frequency tuple is coherent.",
+      "evidence": "TSC and APIC compatibility checks are outside the x86_64 conditional, while advance_tsc is x86_64-only; architecture-specific interface contracts are not supplied.",
+      "disposition": "unknown"
+    },
+    {
+      "claim": "Failure is atomic and preserves the complete pre-call state.",
+      "evidence": "Several fallible mutations occur sequentially without visible rollback, including frequency setting, restoration, and separate clock advancements.",
+      "disposition": "challenged"
+    },
+    {
+      "claim": "Successful return does not itself resume the VM.",
+      "evidence": "The body contains no start or resume operation and finishes by storing a VP stop guard.",
+      "disposition": "supported"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O1",
+      "title": "Compositional snapshot projection restore",
+      "claim": "After LoadedVm::restore returns Ok, every snapshot-owned component has the state represented by accepted saved_state, while destination-owned preparation and bindings are framed.",
+      "why_blocking": "This is the central state-equality claim and cannot be inferred merely from passing saved_state to a callee.",
+      "kind": "callee_contract",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "It directly consumes saved_state and must provide the aggregate restore and framing contract."
+        }
+      ]
+    },
+    {
+      "id": "O2",
+      "title": "Continuous no-execution interval",
+      "claim": "No VP can execute from the first restore-related mutation until the returned restore_start_guard is deliberately released.",
+      "why_blocking": "Stopping VPs only at the end is insufficient if execution is possible during restoration or between awaited operations.",
+      "kind": "proof_lemma_or_executable_concurrency_test",
+      "suggested_callees": [
+        {
+          "symbol": "PartitionUnit::temporarily_stop_vps",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "It must define stop coverage, guard lifetime, nesting, cancellation, and acquisition semantics."
+        },
+        {
+          "symbol": "LoadedVm::restore_snapshot_state caller",
+          "file_hint": "call sites under openvmm/openvmm_core/src/worker",
+          "reason": "The surrounding lifecycle may establish the required stopped entry invariant."
+        }
+      ]
+    },
+    {
+      "id": "O3",
+      "title": "Stop-guard replacement safety",
+      "claim": "Acquiring a new stop guard and assigning it over any previous restore_start_guard cannot create an interval in which VPs resume.",
+      "why_blocking": "A transient resume violates the pre-execution boundary even if a guard is present at final return.",
+      "kind": "callee_contract_or_executable_attack",
+      "suggested_callees": [
+        {
+          "symbol": "PartitionUnit::temporarily_stop_vps",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "Its guard composition and Drop behavior determine replacement safety."
+        }
+      ]
+    },
+    {
+      "id": "O4",
+      "title": "Active versus deferred state preservation",
+      "claim": "Restore reconstructs active state as active and pending or deferred state as pending or deferred without premature activation or loss.",
+      "why_blocking": "The intent explicitly distinguishes these classes, but the supplied body contains no visible classification.",
+      "kind": "component_contract_and_executable_test",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "It must aggregate component restore phases without conflating active and deferred state."
+        }
+      ]
+    },
+    {
+      "id": "O5",
+      "title": "Stable VP identity mapping",
+      "claim": "Saved VP records are applied only to destination VPs with the same stable identity, independent of enumeration order, and unmatched destination VPs retain valid initial or default state.",
+      "why_blocking": "Index-based mapping could silently apply valid-looking state to the wrong VP.",
+      "kind": "proof_lemma_and_permutation_test",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "The aggregate restore path must identify the VP-state restoration implementation."
+        },
+        {
+          "symbol": "PartitionUnit VP restore routine",
+          "file_hint": "partition unit saved-state restore implementation",
+          "reason": "It likely owns concrete identity lookup and unmatched-VP behavior."
+        }
+      ]
+    },
+    {
+      "id": "O6",
+      "title": "Downtime transformation correctness",
+      "claim": "For every guest-visible clock domain, the successful final value equals restored snapshot time plus exactly downtime, with defined rounding and overflow behavior and without double advancement.",
+      "why_blocking": "Three advancement operations may overlap semantically, and ordering alone does not prove arithmetic correctness or clock ownership.",
+      "kind": "callee_contract_and_cross_domain_executable_test",
+      "suggested_callees": [
+        {
+          "symbol": "StateUnits::advance_time",
+          "file_hint": "state unit restore implementation",
+          "reason": "It must define affected component clocks and exclude clocks handled elsewhere."
+        },
+        {
+          "symbol": "PartitionUnit::advance_tsc",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "It must define TSC and APIC arithmetic, rounding, overflow, and affected VPs."
+        },
+        {
+          "symbol": "Partition::advance_snapshot_time",
+          "file_hint": "partition backend implementation or trait definition",
+          "reason": "It must define backend clock effects and separation from component and VP clocks."
+        }
+      ]
+    },
+    {
+      "id": "O7",
+      "title": "Frequency policy and framing",
+      "claim": "Frequency incompatibilities are rejected before snapshot mutation, set_tsc_frequency_hz with an equal value has no disallowed side effects, and the APIC policy for Some and None is explicit.",
+      "why_blocking": "Frequency is both a compatibility input and an advancement parameter; hidden setter effects or late APIC failure could violate preservation and failure expectations.",
+      "kind": "callee_contract_and_failure_injection_test",
+      "suggested_callees": [
+        {
+          "symbol": "Partition::tsc_frequency_hz",
+          "file_hint": "partition backend trait and implementations",
+          "reason": "It defines availability and meaning of destination TSC frequency."
+        },
+        {
+          "symbol": "Partition::set_tsc_frequency_hz",
+          "file_hint": "partition backend trait and implementations",
+          "reason": "It must frame all state except intended frequency configuration."
+        },
+        {
+          "symbol": "Partition::apic_frequency_hz",
+          "file_hint": "partition backend trait and implementations",
+          "reason": "It determines whether None means destination fallback and whether availability can be checked before mutation."
+        }
+      ]
+    },
+    {
+      "id": "O8",
+      "title": "Failure residual-state contract",
+      "claim": "Every error point has a documented residual-state guarantee, including whether retry, teardown, or inspection is safe.",
+      "why_blocking": "The sequence can fail after state mutations, so callers need a usable failure-state contract rather than only an Err value.",
+      "kind": "callee_contract_or_executable_failure_matrix",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "It may partially restore components before returning an error."
+        },
+        {
+          "symbol": "StateUnits::advance_time",
+          "file_hint": "state unit restore implementation",
+          "reason": "It may partially advance component clocks."
+        },
+        {
+          "symbol": "PartitionUnit::advance_tsc",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "It may partially advance VP clocks."
+        },
+        {
+          "symbol": "Partition::advance_snapshot_time",
+          "file_hint": "partition backend implementation or trait definition",
+          "reason": "It is the final fallible time mutation before the explicit stop."
+        }
+      ]
+    },
+    {
+      "id": "O9",
+      "title": "Snapshot acceptance boundary",
+      "claim": "There is an explicit point at which saved_state becomes accepted, and all required format, architecture, capacity, component-identity, and external-resource checks occur no later than that point.",
+      "why_blocking": "The requested postcondition concerns an accepted snapshot, but the caller context and acceptance protocol are absent.",
+      "kind": "caller_contract_and_executable_negative_tests",
+      "suggested_callees": [
+        {
+          "symbol": "LoadedVm::restore",
+          "file_hint": "openvmm/openvmm_core/src/worker/dispatch.rs",
+          "reason": "It may currently combine validation and mutation and therefore define the practical acceptance boundary."
+        }
+      ]
+    },
+    {
+      "id": "O10",
+      "title": "Architecture-specific restore-time semantics",
+      "claim": "For every supported guest architecture, restore_time fields have coherent meanings and all required compatibility checks occur before state mutation.",
+      "why_blocking": "VP TSC advancement is x86_64-only while frequency validation is syntactically architecture-independent.",
+      "kind": "configuration_specific_contract_and_test",
+      "suggested_callees": [
+        {
+          "symbol": "PartitionUnit::advance_tsc",
+          "file_hint": "partition unit implementation or trait definition",
+          "reason": "It defines the x86_64-specific transformation."
+        },
+        {
+          "symbol": "Partition frequency accessors",
+          "file_hint": "partition backend trait and architecture-specific implementations",
+          "reason": "They define whether frequency fields are meaningful and available on each architecture."
+        }
+      ]
+    }
+  ],
+  "candidate_variants": [
+    {
+      "name": "Strong transactional stopped restore",
+      "semantic_difference": "Requires continuous stopping throughout the call and requires every Err to preserve the complete pre-call destination state, including components and clock domains.",
+      "discriminator": "Inject a failure after each mutating step, compare the complete pre-call and post-failure projections, and concurrently assert that no VP instruction retires."
+    },
+    {
+      "name": "Baseline stopped-success restore",
+      "semantic_difference": "Requires exact transformed snapshot projection and a held stop guard only on Ok; Err may leave partial state that must be torn down or treated as unusable.",
+      "discriminator": "Inject failure after state_units.advance_time. Partial mutation is permitted, but no successful result may expose a runnable VP or incorrect transformed projection."
+    },
+    {
+      "name": "Weaker lifecycle-only restore",
+      "semantic_difference": "Requires only successful completion of delegated restore and requested time adjustments plus storage of a stop guard; it does not guarantee observational equality, stable VP identity mapping, or preservation of unmatched VP defaults.",
+      "discriminator": "Restore into a destination whose VP enumeration order differs. This variant may pass when operations report success even if VP states are swapped; the baseline variant cannot."
+    },
+    {
+      "name": "Destination APIC fallback policy",
+      "semantic_difference": "Interprets saved_apic_frequency None as authorization to use the destination APIC frequency for x86_64 downtime adjustment, while requiring that frequency to be available before any restore mutation.",
+      "discriminator": "Use a snapshot with no saved APIC frequency against backends that expose, omit, or vary destination APIC frequency and verify whether rejection occurs before self.restore."
+    },
+    {
+      "name": "No APIC adjustment legacy policy",
+      "semantic_difference": "Interprets saved_apic_frequency None as requiring no APIC adjustment from snapshot state rather than substitution of the destination frequency.",
+      "discriminator": "Restore a legacy snapshot with None and nonzero downtime, then inspect guest APIC timer progression relative to TSC progression."
+    }
+  ],
+  "uncertainties": [
+    "No caller context is supplied, so the entry-state stopped invariant and lifecycle meaning of restore_start_guard are unknown.",
+    "The accepted-snapshot validation boundary is not shown.",
+    "The semantics, failure atomicity, and framing behavior of LoadedVm::restore are unknown.",
+    "It is unknown whether saved_state includes memory contents, only device and processor state, or another subset.",
+    "Stable VP identity representation and mapping behavior are not visible.",
+    "The distinction between active and pending or deferred components is not visible in this body.",
+    "The clock domains affected by state_units.advance_time, advance_tsc, and advance_snapshot_time may overlap.",
+    "Rounding, saturation, overflow, and maximum supported downtime are unspecified.",
+    "The meaning of saved_apic_frequency None is ambiguous.",
+    "The side effects of setting an already-equal TSC frequency are unknown.",
+    "temporarily_stop_vps has no visible Result, so failure behavior, cancellation safety, and guard acquisition guarantees are unknown.",
+    "The behavior when the future is cancelled during restore or time advancement is unspecified.",
+    "It is unknown whether partition frequency interfaces are meaningful on non-x86_64 guests.",
+    "Profiling operations are assumed not to mutate guest-relevant state.",
+    "The enclosing lifecycle may mark a partially restored VM unusable after failure, but that behavior is not shown."
+  ],
+  "recommended_next_step": "Expand O2 first by establishing the caller entry invariant and temporarily_stop_vps guard semantics. Then expand O1, O5, and O6 into compositional restore, VP-identity, and clock-domain contracts, and run the O7 and O8 failure-injection matrix before selecting the baseline or stronger transactional specification."
+}

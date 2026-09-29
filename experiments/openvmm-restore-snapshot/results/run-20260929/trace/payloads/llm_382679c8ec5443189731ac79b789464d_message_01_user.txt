@@ -1,0 +1,192 @@
+Analyze OpenVMM LoadedVm::restore_snapshot_state.
+
+SYSTEM INTENT:
+# OpenVMM snapshot restore intent
+
+## Source identity
+
+- Repository: `/home/ruize/argus-improvement/openvmm-restore-onboarding`
+- Revision: `62acaa5aebe19853286c056683bb372bd8f8b34a`
+- Target: `openvmm/openvmm_core/src/worker/dispatch.rs`
+- Function: `LoadedVm::restore_snapshot_state`
+
+## Top-level intent
+
+When snapshot loading succeeds, the returned loaded VM must remain stopped and its snapshot-owned, guest-relevant state must equal the state represented by the accepted snapshot, after applying only restore-time transformations explicitly permitted by the restore request.
+
+The analysis must distinguish:
+
+- state represented in the snapshot from destination or host runtime state that is not snapshot-owned;
+- restored active component state from retained pending/deferred component state;
+- saved VP state selected by stable VP identity from destination VPs that retain their valid initial/default state;
+- snapshot time from the permitted downtime adjustment applied during restore.
+
+Prepared destination memory, compatibility, capacity, external-resource bindings, and host operational details are not values to overwrite merely because a snapshot is loaded. Successful return is a pre-execution boundary: the guest must still be stopped and later resume/readiness behavior is outside this function's success postcondition.
+
+## Analysis questions
+
+1. What caller-facing precondition and postcondition should this function have?
+2. Which direct callees must establish each part of the postcondition?
+3. Does the implementation order preserve the intended pre-execution boundary?
+4. Does any implementation path appear inconsistent with the intent?
+5. Which claims require executable tests, component contracts, or Verus proof obligations rather than natural-language reasoning?
+6. Are there materially different candidate specifications that should be retained for review?
+
+Treat any natural-language `MATCH` as heuristic evidence, not proof. Preserve assumptions, uncertainty, possible counterexamples, and proof obligations.
+
+
+CALLER CONTEXT:
+```rust
+Line 3311:                 #[cfg(target_os = "linux")]
+Line 3312:                 vfio_inspect,
+Line 3313:                 #[cfg(target_os = "linux")]
+Line 3314:                 vfio_cdev_inspect,
+Line 3315:                 halt_recv,
+Line 3316:                 client_notify_send,
+Line 3317:                 chipset: chipset.chipset.clone(),
+Line 3318:                 iommu_devices,
+Line 3319:                 #[cfg(guest_arch = "x86_64")]
+Line 3320:                 ioapic_iommu_rid,
+Line 3321:                 pcie_host_bridges,
+Line 3322:                 pcie_root_complexes,
+Line 3323:                 generic_initiator_sources,
+Line 3324:                 pcie_hotplug_devices: Vec::new(),
+Line 3325:             },
+Line 3326:         };
+Line 3327:
+Line 3328:         if let Some(saved_state) = saved_state {
+Line 3329:             this.restore_snapshot_state(saved_state, restore_time)
+Line 3330:                 .await?;
+Line 3331:         } else {
+Line 3332:             // Assign PCI bus numbers/BARs before building firmware so that the
+Line 3333:             // ACPI tables (specifically the SRAT generic-initiator entries) can
+Line 3334:             // read the assigned secondary bus numbers from the root ports'
+Line 3335:             // bridge registers.
+Line 3336:             this.assign_pci_resources().await?;
+Line 3337:             this.inner.load_firmware(false).await?;
+Line 3338:         }
+Line 3339:
+Line 3340:         Ok(this)
+```
+
+TARGET FUNCTION:
+```rust
+    async fn restore_snapshot_state(
+        &mut self,
+        saved_state: SavedState,
+        restore_time: Option<(Duration, u64, Option<u64>)>,
+    ) -> anyhow::Result<()> {
+        if let Some((_, saved_frequency, saved_apic_frequency)) = restore_time {
+            let destination_frequency = self
+                .inner
+                .partition
+                .tsc_frequency_hz()?
+                .context("destination backend does not expose a guest TSC frequency")?;
+            anyhow::ensure!(
+                destination_frequency == saved_frequency,
+                "destination TSC frequency {destination_frequency} Hz does not match saved frequency {saved_frequency} Hz"
+            );
+            self.inner.partition.set_tsc_frequency_hz(saved_frequency)?;
+            let destination_apic_frequency = self
+                .inner
+                .partition
+                .apic_frequency_hz()?
+                .context("destination backend does not expose a local APIC frequency")?;
+            if let Some(saved_apic_frequency) = saved_apic_frequency {
+                anyhow::ensure!(
+                    destination_apic_frequency == saved_apic_frequency,
+                    "destination APIC frequency {destination_apic_frequency} Hz does not match saved frequency {saved_apic_frequency} Hz"
+                );
+            }
+        }
+
+        let saved_state_restore = openvmm_defs::profile::ProfileSpan::start();
+        self.restore(saved_state)
+            .await
+            .context("loadedvm restore failed")?;
+        saved_state_restore.complete("restore", "saved_state_restore", Default::default());
+
+        if let Some((downtime, frequency, saved_apic_frequency)) = restore_time {
+            let state_time_advance = openvmm_defs::profile::ProfileSpan::start();
+            self.state_units
+                .advance_time(downtime)
+                .await
+                .context("failed to advance restored VM time")?;
+            state_time_advance.complete("restore", "state_time_advance", Default::default());
+
+            #[cfg(guest_arch = "x86_64")]
+            {
+                let apic_frequency =
+                    match saved_apic_frequency {
+                        Some(frequency) => frequency,
+                        None => self.inner.partition.apic_frequency_hz()?.context(
+                            "destination backend does not expose a local APIC frequency",
+                        )?,
+                    };
+                let vp_tsc_advance = openvmm_defs::profile::ProfileSpan::start();
+                self.inner
+                    .partition_unit
+                    .advance_tsc(downtime, frequency, Some(apic_frequency))
+                    .await
+                    .context("failed to advance restored vCPU TSC")?;
+                vp_tsc_advance.complete("restore", "vp_tsc_advance", Default::default());
+            }
+
+            let backend_time_advance = openvmm_defs::profile::ProfileSpan::start();
+            self.inner
+                .partition
+                .advance_snapshot_time(downtime)
+                .context("failed to advance backend snapshot clock")?;
+            backend_time_advance.complete("restore", "backend_time_advance", Default::default());
+        }
+
+        let restore_vp_stop = openvmm_defs::profile::ProfileSpan::start();
+        self.restore_start_guard = Some(self.inner.partition_unit.temporarily_stop_vps().await);
+        restore_vp_stop.complete("restore", "restore_vp_stop", Default::default());
+
+        Ok(())
+    }
+
+```
+
+Return exactly this JSON shape:
+{
+  "recommended_candidate_id": "candidate-a",
+  "candidates": [
+    {
+      "id": "candidate-a",
+      "name": "short name",
+      "pre_condition": "caller obligations",
+      "post_condition": "caller-visible guarantees",
+      "semantic_difference": "how this differs from the other candidates",
+      "discriminator": "a concrete scenario that distinguishes it"
+    }
+  ],
+  "callees": [
+    {
+      "name": "callee name",
+      "signature": "informal signature",
+      "pre_condition": "what this caller establishes",
+      "post_condition": "what this caller needs"
+    }
+  ],
+  "implementation_hypotheses": [
+    {
+      "claim": "possible support or mismatch",
+      "code_evidence": "specific statement or ordering",
+      "disposition": "supported|challenged|unknown"
+    }
+  ],
+  "proof_obligations": ["obligation"],
+  "uncertainties": ["uncertainty"]
+}
+
+Requirements:
+- Produce exactly three materially different candidates: projection equality,
+  an intentionally stronger full-state interpretation, and a weaker
+  orchestration-only interpretation.
+- Do not approve a candidate merely because the body appears to implement it.
+- Include time adjustment, stable VP identity, active versus pending component
+  state, preserved destination resources, and the stopped pre-execution boundary.
+- Identify which facts require callee contracts or proof rather than inspection
+  of this function body.

@@ -15,7 +15,7 @@ uv run python src/configure_llm.py
 
 The wizard prompts for:
 
-- model backend (`opencode`, `auto`, `codex-cli`, or `claude-cli`)
+- model backend (`copilot-cli`, `opencode`, `auto`, `codex-cli`, or `claude-cli`)
 - provider id
 - provider display name
 - API protocol (`openai`-compatible or `anthropic`-compatible)
@@ -32,7 +32,7 @@ It then:
 - merges the matching provider entry into the detected OpenCode config file
 - previews the target files, requests confirmation, backs up existing files, and writes atomically
 
-When you select `auto`, `codex-cli`, or `claude-cli`, the wizard updates
+When you select `copilot-cli`, `auto`, `codex-cli`, or `claude-cli`, the wizard updates
 `backend` in the active FM-Agent TOML file and removes non-secret legacy LLM
 overrides from the project `.env`. Before removal, any `.env` `LLM_MODEL` and
 `LLM_EFFORT` values are migrated to the TOML so the selected local backend keeps
@@ -56,7 +56,7 @@ For example, switch FM-Agent to a local Codex CLI backend without touching the
 provider setup:
 
 ```bash
-uv run python src/configure_llm.py set --backend codex-cli
+uv run python src/configure_llm.py set --backend copilot-cli --name gpt-5.6-sol
 ```
 
 The supported flags map directly to the six non-secret LLM settings:
@@ -73,7 +73,7 @@ uv run python src/configure_llm.py set \
 
 Any subset of those flags is valid. Add `--yes` for non-interactive use after
 you have reviewed the values. The accepted backend values are `opencode`,
-`auto`, `codex-cli`, and `claude-cli`; accepted API styles are `openai` and
+`copilot-cli`, `auto`, `codex-cli`, and `claude-cli`; accepted API styles are `openai` and
 `anthropic`; effort is empty, `low`, `medium`, or `high`.
 
 Backups of `.env`, prior OpenCode key files, and OpenCode configuration files
@@ -98,10 +98,10 @@ semantics as `config.py`; otherwise they update the repository's
 
 ```toml
 [llm]
-name     = "anthropic/claude-sonnet-4.6"    # override: LLM_MODEL — default model, same as upstream FM-Agent
+name     = "gpt-5.6-sol"                    # override: LLM_MODEL — default model
 provider = "openrouter"                       # override: OPENCODE_MODEL_PROVIDER — an OpenCode provider id
 base_url = "https://openrouter.ai/api/v1"     # override: LLM_API_BASE_URL — endpoint for FM-Agent's direct reasoner calls
-backend  = "opencode"                         # override: FM_AGENT_MODEL_BACKEND — opencode, auto, codex-cli, or claude-cli
+backend  = "copilot-cli"                      # override: FM_AGENT_MODEL_BACKEND — copilot-cli, opencode, auto, codex-cli, or claude-cli
 api_style = "openai"                          # override: LLM_API_STYLE — endpoint style for OpenCode adapter selection
 effort   = ""                                 # override: LLM_EFFORT — optional local CLI reasoning effort
 ```
@@ -131,7 +131,7 @@ It calls the model two ways:
 - **OpenCode** (setup / spec / bug validation): `opencode run --model "$OPENCODE_MODEL_PROVIDER/$LLM_MODEL"`; FM-Agent supplies the matching OpenCode provider automatically (below), so no manual OpenCode config is needed.
 - **Direct** (reasoner): hits `$LLM_API_BASE_URL` itself, authenticating with `$LLM_API_KEY`.
 
-When `FM_AGENT_MODEL_BACKEND` is set to `auto`, `codex-cli`, or `claude-cli`,
+When `FM_AGENT_MODEL_BACKEND` is set to `copilot-cli`, `auto`, `codex-cli`, or `claude-cli`,
 FM-Agent bypasses both of those paths and uses local CLI authentication for all
 model calls:
 

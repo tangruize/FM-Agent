@@ -1,5 +1,7 @@
+import json
 import os
 import shlex
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
@@ -12,6 +14,8 @@ _BACKEND_ALIASES = {
     "codex-cli": "codex-cli",
     "claude": "claude-cli",
     "claude-cli": "claude-cli",
+    "copilot": "copilot-cli",
+    "copilot-cli": "copilot-cli",
     "opencode": "opencode",
     "open-code": "opencode",
 }
@@ -39,10 +43,16 @@ def resolve_model_backend():
         return backend
 
     host_hint = (os.environ.get("FM_AGENT_HOST") or os.environ.get("FM_AGENT_CLIENT") or "").lower()
+    if "copilot" in host_hint:
+        return "copilot-cli"
     if "claude" in host_hint:
         return "claude-cli"
     if "codex" in host_hint:
         return "codex-cli"
+
+    copilot_markers = ("COPILOT_SESSION_ID", "COPILOT_ALLOW_ALL")
+    if any(os.environ.get(name) for name in copilot_markers):
+        return "copilot-cli"
 
     claude_markers = ("CLAUDE_PLUGIN_ROOT", "CLAUDE_CODE_ENTRYPOINT")
     if any(os.environ.get(name) for name in claude_markers):
@@ -52,11 +62,18 @@ def resolve_model_backend():
     if any(os.environ.get(name) for name in codex_markers):
         return "codex-cli"
 
+    if shutil.which("copilot"):
+        return "copilot-cli"
+    if shutil.which("claude"):
+        return "claude-cli"
+    if shutil.which("codex"):
+        return "codex-cli"
+
     return "codex-cli"
 
 
 def is_cli_backend_enabled():
-    return resolve_model_backend() in {"codex-cli", "claude-cli"}
+    return resolve_model_backend() in {"codex-cli", "claude-cli", "copilot-cli"}
 
 
 def cli_effort():
@@ -78,7 +95,7 @@ def build_agent_command(model, prompt, cwd, files=None, backend=None, effort=Non
     resolved = _normalize_backend(backend) if backend else resolve_model_backend()
     if resolved == "auto":
         resolved = resolve_model_backend()
-    if resolved not in {"codex-cli", "claude-cli"}:
+    if resolved not in {"codex-cli", "claude-cli", "copilot-cli"}:
         raise ValueError(f"unsupported CLI backend: {resolved}")
 
     cwd = os.path.abspath(cwd)
@@ -102,6 +119,28 @@ def build_agent_command(model, prompt, cwd, files=None, backend=None, effort=Non
         if effort:
             argv += ["-c", f'model_reasoning_effort="{effort}"']
         argv.append("-")
+        return AgentCommand(argv=argv, stdin=stdin, backend=resolved)
+
+    if resolved == "copilot-cli":
+        argv = [
+            "copilot",
+            "--silent",
+            "--output-format",
+            "json",
+            "--stream",
+            "off",
+            "--no-color",
+            "--no-auto-update",
+            "--no-ask-user",
+            "--no-custom-instructions",
+            "--allow-all",
+            "-C",
+            cwd,
+        ]
+        if model:
+            argv += ["--model", model]
+        if effort:
+            argv += ["--reasoning-effort", effort]
         return AgentCommand(argv=argv, stdin=stdin, backend=resolved)
 
     argv = [
@@ -187,4 +226,27 @@ def run_agent_for_messages(model, messages):
         raise RuntimeError(
             f"{command.backend} exited with code {result.returncode}: {output}"
         )
-    return (result.stdout or "").strip(), {}
+    stdout = (result.stdout or "").strip()
+    if command.backend != "copilot-cli":
+        return stdout, {}
+
+    final_content = None
+    usage = {}
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "assistant.message":
+            data = event.get("data")
+            if isinstance(data, dict) and data.get("phase") == "final_answer":
+                content = data.get("content")
+                if isinstance(content, str):
+                    final_content = content
+        elif event.get("type") == "result":
+            data = event.get("usage")
+            if isinstance(data, dict):
+                usage = data
+    if final_content is None:
+        raise RuntimeError("copilot-cli JSONL output did not contain a final assistant message")
+    return final_content.strip(), usage

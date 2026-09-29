@@ -1,0 +1,49 @@
+{
+  "disposition": "open",
+  "rationale": "The child analysis does not prove the required result-to-mapping correspondence. It states the desired correspondence only in an intended contract and explicitly marks as unknown whether try_find_user_frame corresponds exactly to logical mapping presence, whether successful leaf and hardware removal changes exactly the selected abstract mapping, and whether empty-table cleanup preserves all other mappings. Those facts remain open child obligations rather than established evidence.",
+  "caller_effect": "The child supports only the weaker claim that Ok(None) is returned when try_find_user_frame returns None and that Ok(Some(f)) can be reached after finding f, matching the selected leaf to f, successfully removing that leaf, invoking hardware unmapping, and completing required cleanup. It does not yet support the parent claim that Ok(Some(f)) occurs if and only if pre-state M maps v to f, that the post-state is exactly M with v removed, or that Ok(None) occurs if and only if v was abstractly absent and leaves M unchanged.",
+  "remaining_gap": "Prove child O1 and O2 to connect try_find_user_frame results to abstract mapping presence and establish lookup purity; prove O3 and O4 to connect the selected leaf mutation to the unique logical mapping; prove O5 to show empty-table cleanup preserves the projection; and prove O6 to establish exact hardware-translation removal and framing. The relevant valid-state error and panic paths must also be shown unreachable through O7 before the bidirectional parent correspondence can close.",
+  "proof_map_updates": [
+    {
+      "edge": "try_unmap_upage.O1 -> unmap.O1",
+      "status": "open",
+      "reason": "Search-to-projection correspondence is required for both Some and None directions."
+    },
+    {
+      "edge": "try_unmap_upage.O1 -> unmap.O2",
+      "status": "open",
+      "reason": "Search purity is required to conclude that the Ok(None) path leaves the abstract mapping unchanged."
+    },
+    {
+      "edge": "try_unmap_upage.O1 -> unmap.O3",
+      "status": "open",
+      "reason": "Exact leaf removal and preservation of other leaves are not proved."
+    },
+    {
+      "edge": "try_unmap_upage.O1 -> unmap.O4",
+      "status": "open",
+      "reason": "The representation-agreement invariant connecting the selected leaf to the abstract mapping remains unproved."
+    },
+    {
+      "edge": "try_unmap_upage.O1 -> unmap.O5",
+      "status": "open",
+      "reason": "Cleanup projection preservation and non-failure remain unproved."
+    },
+    {
+      "edge": "try_unmap_upage.O1 -> unmap.O6",
+      "status": "open",
+      "reason": "Caller-visible hardware translation correspondence remains unproved."
+    },
+    {
+      "edge": "try_unmap_upage.O1 -> unmap.O7",
+      "status": "open",
+      "reason": "Internal errors and panics must be excluded under the parent precondition for the claimed iff result correspondence."
+    },
+    {
+      "obligation": "try_unmap_upage.O1",
+      "status_change": "open -> open",
+      "reason": "The child refines the dependency structure but supplies no completed proof of the exact parent claim."
+    }
+  ],
+  "parent_contract_revision": null
+}

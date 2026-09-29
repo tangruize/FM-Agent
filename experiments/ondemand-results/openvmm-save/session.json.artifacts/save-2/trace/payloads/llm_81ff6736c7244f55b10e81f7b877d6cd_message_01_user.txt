@@ -1,0 +1,72 @@
+FUNCTION:
+save at vmm_core/state_unit/src/lib.rs:951-976
+
+INTENT:
+Analyze this callee only to address the parent obligation:
+{"id": "O1", "title": "Same-generation capture", "claim": "There exists one generation g such that every saved logical value and the returned inventory describe the participating state-unit set at g.", "why_blocking": "Otherwise inventory may identify a different compatible-unit domain from the saved values, so the result lacks a coherent interpretation and cannot support a projection round-trip theorem.", "kind": "callee contract or proof lemma", "suggested_callees": [{"symbol": "StateUnits::save", "file_hint": "state-unit implementation defining save", "reason": "Determine whether capture pins membership, records a generation, or otherwise uses a stable identity view."}, {"symbol": "StateUnits::inventory", "file_hint": "state-unit implementation defining inventory", "reason": "Determine whether inventory is immutable, generation-tagged, or derived from the exact set used by save."}], "status": "open"}
+
+CALLER CONTEXT:
+(not supplied)
+
+PARENT BLOCKING OBLIGATION:
+{
+  "id": "O1",
+  "title": "Same-generation capture",
+  "claim": "There exists one generation g such that every saved logical value and the returned inventory describe the participating state-unit set at g.",
+  "why_blocking": "Otherwise inventory may identify a different compatible-unit domain from the saved values, so the result lacks a coherent interpretation and cannot support a projection round-trip theorem.",
+  "kind": "callee contract or proof lemma",
+  "suggested_callees": [
+    {
+      "symbol": "StateUnits::save",
+      "file_hint": "state-unit implementation defining save",
+      "reason": "Determine whether capture pins membership, records a generation, or otherwise uses a stable identity view."
+    },
+    {
+      "symbol": "StateUnits::inventory",
+      "file_hint": "state-unit implementation defining inventory",
+      "reason": "Determine whether inventory is immutable, generation-tagged, or derived from the exact set used by save."
+    }
+  ],
+  "status": "open"
+}
+
+SOURCE:
+```rust
+    pub async fn save(&mut self) -> Result<Vec<SavedStateUnit>, StateTransitionError> {
+        assert!(!self.running);
+        // Save can occur in any order since it will not observably mutate
+        // state.
+        let r = self
+            .run_op(
+                "save",
+                None,
+                State::Stopped,
+                State::Saving,
+                State::Stopped,
+                StateRequest::Save,
+                |_, _| Some(()),
+                |_| &[],
+            )
+            .await;
+
+        let states = extract("save", r, |name, state| {
+            state.map(|state| SavedStateUnit {
+                name: name.to_string(),
+                state,
+            })
+        })?;
+
+        Ok(states)
+    }
+
+```
+
+Return an object with contract {pre_condition, post_condition, failure_condition}, abstraction {name, abstract_state, projection, preserved_state, hidden_representation, observation_boundary}, implementation_assessment [{claim,evidence,disposition}], obligations [{id,title,claim,why_blocking,kind,suggested_callees:[{symbol,file_hint,reason}]}], candidate_variants [{name,semantic_difference,discriminator}], uncertainties [string], and recommended_next_step.
+
+Requirements:
+- Separate what this body establishes from what requires callee contracts.
+- Produce at least one stronger and one weaker candidate variant with a concrete discriminator.
+- The abstraction must identify observable state, its projection, preserved state, hidden representation, and the exact observation boundary.
+- Obligations must be independently selectable for later `expand`; use stable short ids such as O1, O2.
+- Include bug hypotheses as challenged assessments, but do not report an unproved hypothesis as a bug.
+- Prefer obligations that can be discharged by a callee contract, executable attack, or proof lemma.

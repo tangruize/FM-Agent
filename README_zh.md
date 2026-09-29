@@ -74,7 +74,7 @@ FM-Agent 的[官方网站](http://fm-agent.ai/)提供了在线代码库推理服
 - Python 3.11.7
 - pip 23.3.1
 - uv 0.7.9
-- OpenCode 1.17.9
+- GitHub Copilot CLI（默认后端），或 OpenCode 1.17.9
 - Bun/bunx 1.3.14
 - Homebrew 6.0.3
 - UnZip 6.00
@@ -90,7 +90,7 @@ uv run python src/configure_llm.py
 ```
 
 该向导会先展示预览、备份已有文件，然后更新当前生效的 FM-Agent TOML、把 API 密钥写入 `.env` 和供独立 OpenCode 使用的私有本地密钥文件，并同步对应的 OpenCode provider 到 `~/.config/opencode/opencode.json`（或当前平台上的等价路径），无需手写 JSON。
-若在向导中选择 `auto`、`codex-cli` 或 `claude-cli`，则会更新当前生效的 FM-Agent TOML 中的 backend，并清除项目 `.env` 里残留的非密钥 LLM 覆盖项；其中模型和 effort 的值会先迁移到 TOML。本地 CLI 使用自身认证，不需要 API 密钥或 OpenCode provider 配置。
+若在向导中选择 `copilot-cli`、`auto`、`codex-cli` 或 `claude-cli`，则会更新当前生效的 FM-Agent TOML 中的 backend，并清除项目 `.env` 里残留的非密钥 LLM 覆盖项；其中模型和 effort 的值会先迁移到 TOML。本地 CLI 使用自身认证，不需要 API 密钥或 OpenCode provider 配置。
 
 如果你更希望手动编辑文件，可以复制模板：
 
@@ -106,10 +106,10 @@ LLM_API_KEY=your-api-key-here
 
 非密钥配置——模型、endpoint、backend、provider 等——在 `fm-agent.toml` 的 `[llm]` 段，直接改它是永久生效的做法。若不想动这个被 git 跟踪的文件（比如你是 git clone、之后会 `git pull` 更新），可以用对应的环境变量覆盖，写在 `.env` 或 shell 里即可。优先级为 `env > .env > fm-agent.toml`；由于 `.env` 会盖过 toml，残留的旧值会覆盖你后来对 toml 的修改——所以改了 toml 不生效时，先检查 `.env`。向导会顺手清理常见的旧 LLM 覆盖变量，并在启动向导的 shell 已导出 LLM 变量时提示使用 `unset`，否则该变量仍会覆盖保存的配置。详情及 OpenCode provider 配置见 [docs/config_llm.md](docs/config_llm.md)。
 
-如需只修改某一项非密钥 LLM 配置，无需手动编辑文件。例如，将模型后端切换到本地 Codex CLI：
+如需只修改某一项非密钥 LLM 配置，无需手动编辑文件。例如，将模型后端切换到 GitHub Copilot CLI：
 
 ```bash
-uv run python src/configure_llm.py set --backend codex-cli
+uv run python src/configure_llm.py set --backend copilot-cli --name gpt-5.6-sol
 ```
 
 该命令会预览并备份 `fm-agent.toml`，只修改命令中指定的配置项。它还支持 `--name`、`--provider`、`--base-url`、`--effort` 和 `--api-style`；完整语法见 [docs/config_llm.md](docs/config_llm.md)。若 `.env` 中仍有会覆盖本次 TOML 修改的旧值，命令会在写入前给出警告。
@@ -154,6 +154,38 @@ FM-Agent 会从 `fm-agent.toml` 自动配置 OpenCode 的 provider，因此无�
 ```bash
 uv run python main.py <proj_dir> [--resume] [--all-bugs] [--domain-knowledge FILE ...] [--bug-validator FILE] [--submodule PATH [PATH ...]]
 ```
+
+### 按需 top-down 分析
+
+当一个 proof target 只应展开显式选择的 callee 时，使用 bounded workflow：
+
+```bash
+uv run python -m src.ondemand analyze \
+  --repo /path/to/repository \
+  --session analysis/session.json \
+  --file src/module.rs \
+  --symbol target_function \
+  --intent intent.md
+
+uv run python -m src.ondemand expand \
+  --session analysis/session.json \
+  --parent target_function \
+  --obligation O1 \
+  --file src/callee.rs \
+  --symbol selected_callee
+
+uv run python -m src.ondemand refine \
+  --session analysis/session.json \
+  --node selected_callee \
+  --feedback refinement.md
+
+uv run python -m src.ondemand reintegrate \
+  --session analysis/session.json \
+  --parent target_function \
+  --child selected_callee
+```
+
+该 workflow 会记录 source hash、contract、abstraction、可选择的 obligation、revision history、caller-child edge、reintegration 结果和结构化模型 trace，并且绝不会自动展开模型建议的 callee。对 Rust/Verus 做独立规格恢复实验时，可在 `analyze` 和 `expand` 中加入 `--strip-verification-annotations`；原始 source hash 和行号 identity 仍会保留。
 
 | 参数 | 描述 |
 |---|---|

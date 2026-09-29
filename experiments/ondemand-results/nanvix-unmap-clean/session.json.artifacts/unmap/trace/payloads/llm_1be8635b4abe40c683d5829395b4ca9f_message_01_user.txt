@@ -1,0 +1,124 @@
+FUNCTION:
+unmap at src/kernel/src/mm/virt/vmem.rs:2081-2163
+
+INTENT:
+Analyze this callee only to address the parent obligation:
+{"id": "O1", "title": "Result-to-mapping correspondence", "claim": "For eligible v, Vmem::unmap(v) returns Ok(Some(f)) if and only if the pre-state M maps v to f, and then the post-state mapping is exactly the pre-state mapping with v removed. It returns Ok(None) if and only if v was absent, and then the mapping relation is unchanged.", "why_blocking": "This is the minimum fact needed for the wrapper's boolean to describe abstract removal rather than merely the callee's option tag.", "kind": "callee contract", "suggested_callees": [{"symbol": "Vmem::unmap", "file_hint": "definition of Vmem::unmap", "reason": "Establish the semantic meaning of Some and None and the relation between the selected entry and returned frame."}], "status": "open"}
+
+CALLER CONTEXT:
+(not supplied)
+
+PARENT BLOCKING OBLIGATION:
+{
+  "id": "O1",
+  "title": "Result-to-mapping correspondence",
+  "claim": "For eligible v, Vmem::unmap(v) returns Ok(Some(f)) if and only if the pre-state M maps v to f, and then the post-state mapping is exactly the pre-state mapping with v removed. It returns Ok(None) if and only if v was absent, and then the mapping relation is unchanged.",
+  "why_blocking": "This is the minimum fact needed for the wrapper's boolean to describe abstract removal rather than merely the callee's option tag.",
+  "kind": "callee contract",
+  "suggested_callees": [
+    {
+      "symbol": "Vmem::unmap",
+      "file_hint": "definition of Vmem::unmap",
+      "reason": "Establish the semantic meaning of Some and None and the relation between the selected entry and returned frame."
+    }
+  ],
+  "status": "open"
+}
+
+SOURCE:
+```rust
+    pub fn unmap(
+        &mut self,
+        vaddr: PageAligned<VirtualAddress>,
+    ) -> Result<Option<UserFrame>, Error> {
+        // Check if the provided address lies outside the user space.
+        if !Self::is_user_addr(vaddr.into_inner()) {
+            let reason: &str = "address is not in user space";
+            error!("{reason}");
+            return Err(Error::new(ErrorCode::BadAddress, reason));
+        }
+
+        // Find the corresponding frame address, returning None if the page is not present.
+        let frame_address: FrameAddress = match self.try_find_user_frame(vaddr)? {
+            Some(addr) => addr,
+            None => return Ok(None),
+        };
+
+        let (pgtable_vaddr, unmap_pgtable): (PageTableAddress, bool) = {
+            // Get corresponding page table.
+            let (pgtable_vaddr, page_table): (PageTableAddress, &mut PageTable<PageTableStorage>) = {
+                let vaddr: PageTableAligned<VirtualAddress> = PageTableAligned::from_raw_value(
+                    ::sys::mm::align_down(vaddr.into_raw_value(), PGTAB_ALIGNMENT),
+                )?;
+                let pgtable_vaddr: PageTableAddress = PageTableAddress::new(vaddr);
+                // Get the corresponding page directory entry.
+                // Proof debt: preserve directory readiness through lookup and later table removal.
+                let pde: PageDirectoryEntry = match self.pgdir.read_pde(pgtable_vaddr) {
+                    Some(pde) => pde,
+                    None => {
+                        let reason: &str = "failed to read page directory entry";
+                        error!("{reason}");
+                        return Err(Error::new(ErrorCode::TryAgain, reason));
+                    },
+                };
+
+                // Get corresponding page table.
+                // Check if corresponding page table does not exist.
+                if !pde.is_present() {
+                    let reason: &str = "page table not present";
+                    error!("{reason}");
+                    return Err(Error::new(ErrorCode::NoSuchEntry, reason));
+                };
+
+                (pgtable_vaddr, self.lookup_user_page_table(pgtable_vaddr)?)
+            };
+
+            let page_address: PageAddress = PageAddress::new(vaddr);
+
+            // Check if frame address matches what we expect.
+            if page_table.lookup(page_address)? != frame_address {
+                // The following statement should not be reachable because after mapping user frame we
+                // must have added it to the list of user pages.
+                unreachable!("frame address must match what we expect");
+            }
+
+            // Unmap the page from the target virtual address space.
+            page_table.unmap(page_address)?;
+
+            (pgtable_vaddr, page_table.nmapped() == 0)
+        };
+
+        // Mirror the unmapping into the per-process hardware page table (x86_64).
+        self.hw_unmap_user(vaddr.into_raw_value());
+
+        //====================================================================================
+        // NOTE: if we fail beyond this point and we want to recover we should remap the page.
+        //====================================================================================
+
+        if unmap_pgtable {
+            // Remove page table from the list of user page tables.
+            let at = self
+                .user_page_tables
+                .iter()
+                .position(|(addr, _)| addr == &pgtable_vaddr)
+                .expect("page table must be in the list of user page tables");
+
+            let (_pgtable_addr, _page_table) = self.user_page_tables.remove(at);
+
+            self.pgdir.unmap(pgtable_vaddr)?;
+        }
+
+        Ok(Some(UserFrame::new(frame_address)))
+    }
+
+```
+
+Return an object with contract {pre_condition, post_condition, failure_condition}, abstraction {name, abstract_state, projection, preserved_state, hidden_representation, observation_boundary}, implementation_assessment [{claim,evidence,disposition}], obligations [{id,title,claim,why_blocking,kind,suggested_callees:[{symbol,file_hint,reason}]}], candidate_variants [{name,semantic_difference,discriminator}], uncertainties [string], and recommended_next_step.
+
+Requirements:
+- Separate what this body establishes from what requires callee contracts.
+- Produce at least one stronger and one weaker candidate variant with a concrete discriminator.
+- The abstraction must identify observable state, its projection, preserved state, hidden representation, and the exact observation boundary.
+- Obligations must be independently selectable for later `expand`; use stable short ids such as O1, O2.
+- Include bug hypotheses as challenged assessments, but do not report an unproved hypothesis as a bug.
+- Prefer obligations that can be discharged by a callee contract, executable attack, or proof lemma.

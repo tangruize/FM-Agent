@@ -1,0 +1,1 @@
+Your previous response was invalid: LLM response is not valid JSON: Invalid control character at: line 5 column 101 (char 240). Return only valid JSON matching this schema: one JSON object with exactly three complete candidates and a callees list. Do not include Markdown, tags, or prose.
