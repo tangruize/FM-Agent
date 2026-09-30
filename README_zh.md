@@ -23,7 +23,7 @@ FM-Agent 的[官方网站](http://fm-agent.ai/)提供了在线代码库推理服
 
 当 FM-Agent 通过 `system-proof-agent` 调用时，规范性的操作契约是自包含的 [`system-proof-function-analysis` bundle](system-proof-skills/system-proof-function-analysis/)：有界流程以 [`SKILL.zh-CN.md`](system-proof-skills/system-proof-function-analysis/SKILL.zh-CN.md) 为准，evidence、trust 和 reintegration 规则以 [`GUIDE.zh-CN.md`](system-proof-skills/system-proof-function-analysis/GUIDE.zh-CN.md) 为准。本 README 和 FM-Agent 的其余文档继续作为独立使用 FM-Agent 功能及配置的参考，但不能覆盖 system-proof campaign 的 goal、source scope、proof map 或 evidence policy。
 
-统一 native adapter 默认复用已认证的 GitHub Copilot CLI backend，不要求额外 API key、OpenCode provider 或 FM-Agent model 配置。它暴露 on-demand 的 `analyze`、`show`、`expand`、`refine` 和 `reintegrate` 操作，而不会把 monolithic pipeline 当作 proof authority。FM 输出为 Action 1 判断提供 source-bound candidate contract、attack、abstraction 和 obligation；其中的 disposition 不证明 correctness、不确认 bug，也不关闭 campaign edge。独立用户仍可继续使用下文记录的全部 backend 和 workflow。
+统一 native adapter 默认复用已认证的 GitHub Copilot CLI backend，不要求额外 API key、OpenCode provider 或 FM-Agent model 配置。它暴露 on-demand 的 `analyze`、`show`、`expand`、`refine` 和 `reintegrate` 操作，而不会把 monolithic pipeline 当作 proof authority。FM 输出为规格判断提供 source-bound candidate contract、attack、abstraction 和 obligation；其中的 disposition 不证明 correctness、不确认 bug，也不关闭 campaign edge。独立用户仍可继续使用下文记录的全部 backend 和 workflow。
 
 ## 目录
 
