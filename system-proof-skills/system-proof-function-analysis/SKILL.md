@@ -7,7 +7,7 @@ description: "Use FM-Agent for bounded, source-bound function contract and oblig
 
 Use `analyze-function` as an advisory specialist. It proposes contracts, abstractions, counterexamples and proof obligations; it does not select an adequate specification, establish an invariant, confirm a bug, discharge a proof-map edge or approve intent.
 
-Read [../../docs/system-proof-function-analysis.md](../../docs/system-proof-function-analysis.md) before the first invocation in a campaign.
+Read [GUIDE.md](GUIDE.md) before the first invocation in a campaign.
 
 ## Required inputs
 

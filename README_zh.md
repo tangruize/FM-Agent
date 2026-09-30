@@ -159,7 +159,7 @@ uv run python main.py <proj_dir> [--resume] [--all-bugs] [--domain-knowledge FIL
 
 当一个 proof target 只应展开显式选择的 callee 时，使用 bounded workflow：
 
-集成到 system-proof agent 时，使用仓库内置的 [`system-proof-function-analysis` skill](skills/system-proof-function-analysis/SKILL.md) 和对应的 [evidence/usage guide](docs/system-proof-function-analysis.md)。
+集成到 system-proof agent 时，复制或加载自包含的 [`system-proof-function-analysis` bundle](system-proof-skills/system-proof-function-analysis/)，其中同时包含等价的英文版（`SKILL.md`、`GUIDE.md`）和中文版（`SKILL.zh-CN.md`、`GUIDE.zh-CN.md`）。
 
 ```bash
 uv run python -m src.ondemand analyze \

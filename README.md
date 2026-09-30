@@ -210,7 +210,7 @@ uv run python main.py <proj_dir> [--resume] [--all-bugs] [--domain-knowledge FIL
 
 Use the bounded workflow when one proof target should expand only explicitly selected callees:
 
-For system-proof integration, use the packaged [`system-proof-function-analysis` skill](skills/system-proof-function-analysis/SKILL.md) and its [evidence/usage guide](docs/system-proof-function-analysis.md).
+For system-proof integration, copy or load the self-contained [`system-proof-function-analysis` bundle](system-proof-skills/system-proof-function-analysis/), which contains equivalent English (`SKILL.md`, `GUIDE.md`) and Chinese (`SKILL.zh-CN.md`, `GUIDE.zh-CN.md`) documentation.
 
 ```bash
 uv run python -m src.ondemand analyze \
