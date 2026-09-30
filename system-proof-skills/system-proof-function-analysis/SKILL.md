@@ -7,7 +7,7 @@ description: "Use FM-Agent for bounded, source-bound function contract and oblig
 
 Use `analyze-function` as an advisory specialist. It proposes contracts, abstractions, counterexamples and proof obligations; it does not select an adequate specification, establish an invariant, confirm a bug, discharge a proof-map edge or approve intent.
 
-Read [GUIDE.md](GUIDE.md) before the first invocation in a campaign.
+This file is sufficient for routine use. Read [GUIDE.md](GUIDE.md) for the complete evidence contract, terminology, refinement rules and trust limits.
 
 ## When to use
 
@@ -31,6 +31,42 @@ Do not use it merely because a function is reachable. Use `analyze-protocol` whe
 - a fresh session path and, for retained experiments, an isolated source worktree or copy.
 
 Do not replace the campaign goal with a locally easier helper claim. Do not use model-recommended callees as authority; select an expansion because it blocks the active caller obligation.
+
+## Basic use
+
+Create and inspect one source-bound session:
+
+```sh
+analyze-function analyze \
+  --repo /path/to/isolated-project \
+  --session /path/to/new-session.json \
+  --file src/module.rs \
+  --symbol Type::method \
+  --intent intent.txt \
+  --caller-context caller-context.txt
+
+analyze-function show --session /path/to/new-session.json
+```
+
+Select one open obligation from `show`, then expand one blocking callee and return its result:
+
+```sh
+analyze-function expand \
+  --session /path/to/new-session.json \
+  --parent method \
+  --obligation O1 \
+  --file src/callee.rs \
+  --symbol selected_callee
+
+analyze-function reintegrate \
+  --session /path/to/new-session.json \
+  --parent method \
+  --child selected_callee
+```
+
+Use `refine --node NODE --feedback FILE` only when new source, proof, test or approved domain evidence changes the analysis. Add `--strip-verification-annotations` to `analyze` and `expand` for an independent Rust/Verus contract experiment.
+
+After reintegration, report the session path, analyzed source identity, selected obligation, supported/challenged claims, remaining gaps, global-invariant candidates and the next authoritative check. Do not attach the session as proof evidence.
 
 ## Procedure
 

@@ -7,7 +7,7 @@ description: "在 system-proof campaign 中使用 FM-Agent 进行有界、source
 
 将 `analyze-function` 作为 advisory specialist 使用。它提出 contract、abstraction、counterexample 和 proof obligation；它不负责选择充分的 specification、建立 invariant、确认 bug、关闭 proof-map edge 或批准 intent。
 
-在一个 campaign 中首次调用前，阅读 [GUIDE.zh-CN.md](GUIDE.zh-CN.md)。
+本文件足以完成常规调用。需要完整 evidence contract、术语、refinement 规则和 trust limits 时再阅读 [GUIDE.zh-CN.md](GUIDE.zh-CN.md)。
 
 ## 何时使用
 
@@ -31,6 +31,42 @@ description: "在 system-proof campaign 中使用 FM-Agent 进行有界、source
 - 一个新的 session path；需要保留的实验还应使用隔离的 source worktree 或 copy。
 
 不要把 campaign goal 替换成更容易的局部 helper claim。模型建议的 callee 不是 authority；只有当某个 callee 阻塞当前 caller obligation 时才选择展开它。
+
+## 基本用法
+
+创建并检查一个 source-bound session：
+
+```sh
+analyze-function analyze \
+  --repo /path/to/isolated-project \
+  --session /path/to/new-session.json \
+  --file src/module.rs \
+  --symbol Type::method \
+  --intent intent.txt \
+  --caller-context caller-context.txt
+
+analyze-function show --session /path/to/new-session.json
+```
+
+从 `show` 中选择一个 open obligation，然后展开一个 blocking callee 并返回结果：
+
+```sh
+analyze-function expand \
+  --session /path/to/new-session.json \
+  --parent method \
+  --obligation O1 \
+  --file src/callee.rs \
+  --symbol selected_callee
+
+analyze-function reintegrate \
+  --session /path/to/new-session.json \
+  --parent method \
+  --child selected_callee
+```
+
+只有新的 source、proof、test 或已批准 domain evidence 会改变分析时，才使用 `refine --node NODE --feedback FILE`。进行独立 Rust/Verus contract 实验时，在 `analyze` 和 `expand` 中加入 `--strip-verification-annotations`。
+
+Reintegration 后，报告 session path、分析的 source identity、selected obligation、supported/challenged claims、remaining gaps、global-invariant candidates 和下一项 authoritative check。不要把 session 作为 proof evidence attach。
 
 ## 操作流程
 
