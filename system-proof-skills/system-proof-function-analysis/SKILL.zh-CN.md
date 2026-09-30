@@ -9,6 +9,18 @@ description: "在 system-proof campaign 中使用 FM-Agent 进行有界、source
 
 在一个 campaign 中首次调用前，阅读 [GUIDE.zh-CN.md](GUIDE.zh-CN.md)。
 
+## 何时使用
+
+当 active caller 需要以下事实时使用本 skill：
+
+- 一个函数精确的成功或失败行为；
+- concrete representation 投影出的 abstract state；
+- 一个选定 callee 应提供的 frame condition；
+- 带有区分场景的 stronger/weaker contracts；
+- 一个 blocking proof obligation 下一步需要的 lemma、test 或 source audit。
+
+不要仅因为某个函数 reachable 就使用它。如果所需性质跨越多个 writer 或 operation，例如 lifecycle phase、callback、concurrency、跨 `await` 的时间区间、save/restore composition、ownership conservation 或 failure compensation，应使用 `analyze-protocol`。Function analysis 可以发现这类性质，但不能建立它。
+
 ## 必需输入
 
 - 保持不变的顶层 system-proof goal；
@@ -36,4 +48,3 @@ description: "在 system-proof campaign 中使用 FM-Agent 进行有界、source
 保留 session JSON 及其 artifacts。报告 source identity、分析 span、analysis transform、caller obligation、child edge、contract/abstraction revisions、candidate variants、uncertainties 和 reintegration disposition。
 
 FM session 内的 `open`、`conditional`、`discharged` 和 `refuted` 只是 analysis dispositions。没有独立且 admissible 的 evidence，它们绝不能成为 authoritative system-proof status。source-supported narrative 仍然只是 advisory；`MATCH`、未发现 counterexample 和模型 confidence 都不是 proof。
-

@@ -4,35 +4,6 @@
 
 Use it to improve a candidate contract or proof decomposition. Do not use it to decide whether a specification is adequate, whether an implementation is correct, whether a bug is confirmed or whether a proof-map edge is closed.
 
-## When to use it
-
-Use function analysis when the active caller needs a fact such as:
-
-- the exact successful or failing behavior of one function;
-- the abstract state projected by a concrete representation;
-- the frame condition needed from one callee;
-- a stronger and weaker contract with a discriminating example;
-- the next lemma, test or source audit needed for a proof obligation.
-
-Use `analyze-protocol` instead when the needed property spans multiple writers or operations, including lifecycle phases, callbacks, concurrency, an interval across `await`, save/restore composition, ownership conservation or failure compensation. A function analysis may discover such a property, but does not establish it.
-
-## Setup
-
-From the `system-proof-agent` checkout:
-
-```sh
-git submodule sync -- fm-agent
-git submodule update --init -- fm-agent
-cd fm-agent
-uv sync
-cd ..
-python -m pip install -r requirements-system-proof.txt
-```
-
-The submodule is pinned to the project fork, so a normal clone obtains the exact FM-Agent implementation. `analyze-function` launches `fm-agent/.venv/bin/python` and preserves FM-Agent's backend configuration. Set `FM_AGENT_ROOT` or pass `--fm-root` only when using another checkout; use `--fm-python` only when that checkout has a different prepared interpreter.
-
-For retained experiments, use a fresh target worktree or copy and a new session path. The command rejects an existing session rather than overwriting history.
-
 ## Inputs
 
 Prepare two short text files:
@@ -41,6 +12,8 @@ Prepare two short text files:
 - **caller context**: the direct caller fact, current blocking obligation and any approved assumptions.
 
 Keep the original system goal unchanged. Select one exact repository-relative source file and function symbol. A line number is optional and should be used only to disambiguate repeated symbols; copied revisions can shift line numbers.
+
+For retained experiments, use a fresh target worktree or copy and a new session path. The command rejects an existing session rather than overwriting history.
 
 Example intent:
 

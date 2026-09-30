@@ -4,35 +4,6 @@
 
 使用它改进 candidate contract 或 proof decomposition。不要用它判断 specification 是否充分、implementation 是否正确、bug 是否已确认或 proof-map edge 是否关闭。
 
-## 何时使用
-
-当 active caller 需要以下事实时使用 function analysis：
-
-- 一个函数精确的成功或失败行为；
-- concrete representation 投影出的 abstract state；
-- caller 需要某个 callee 提供的 frame condition；
-- 带有区分场景的 stronger/weaker contract；
-- 某个 proof obligation 下一步需要的 lemma、test 或 source audit。
-
-如果所需性质跨越多个 writer 或 operation，例如 lifecycle phase、callback、concurrency、跨 `await` 的时间区间、save/restore composition、ownership conservation 或 failure compensation，应改用 `analyze-protocol`。Function analysis 可以发现这类性质，但不能建立它。
-
-## 安装
-
-在 `system-proof-agent` checkout 中运行：
-
-```sh
-git submodule sync -- fm-agent
-git submodule update --init -- fm-agent
-cd fm-agent
-uv sync
-cd ..
-python -m pip install -r requirements-system-proof.txt
-```
-
-Submodule 固定到项目 fork，因此普通 clone 可以取得精确的 FM-Agent implementation。`analyze-function` 启动 `fm-agent/.venv/bin/python` 并保留 FM-Agent backend configuration。只有使用另一个 checkout 时才设置 `FM_AGENT_ROOT` 或传入 `--fm-root`；只有该 checkout 使用不同的已准备 interpreter 时才使用 `--fm-python`。
-
-需要保留的实验应使用新的 target worktree/copy 和新的 session path。命令会拒绝覆盖已有 session，以保留历史。
-
 ## 输入
 
 准备两个简短文本文件：
@@ -41,6 +12,8 @@ Submodule 固定到项目 fork，因此普通 clone 可以取得精确的 FM-Age
 - **caller context**：direct caller fact、当前 blocking obligation 和已批准 assumptions。
 
 保持原始 system goal 不变。选择一个精确的 repository-relative source file 和 function symbol。line number 是可选参数，只用于区分重复 symbol；复制到其他 revision 后行号可能变化。
+
+需要保留的实验应使用新的 target worktree/copy 和新的 session path。命令会拒绝覆盖已有 session，以保留历史。
 
 Intent 示例：
 
@@ -202,4 +175,3 @@ session and artifact paths
 - Suggested callees 可能不完整或错误；proof map 仍然是 scope authority。
 - 如果不显式从模型输入中移除 embedded specifications，它们会污染 independent recovery。
 - `open` 不是失败：当它暴露出精确的 invariant、callee contract 或 verification step 时，它仍然有价值。
-

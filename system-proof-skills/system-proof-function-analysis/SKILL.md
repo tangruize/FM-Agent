@@ -9,6 +9,18 @@ Use `analyze-function` as an advisory specialist. It proposes contracts, abstrac
 
 Read [GUIDE.md](GUIDE.md) before the first invocation in a campaign.
 
+## When to use
+
+Use this skill when the active caller needs:
+
+- the exact successful or failing behavior of one function;
+- the abstract state projected by a concrete representation;
+- a frame condition from one selected callee;
+- stronger and weaker contracts with a discriminating scenario;
+- the next lemma, test or source audit for one blocking proof obligation.
+
+Do not use it merely because a function is reachable. Use `analyze-protocol` when the needed property spans multiple writers or operations, including lifecycle phases, callbacks, concurrency, an interval across `await`, save/restore composition, ownership conservation or failure compensation. Function analysis may identify such a property, but does not establish it.
+
 ## Required inputs
 
 - the unchanged top-level system-proof goal;
